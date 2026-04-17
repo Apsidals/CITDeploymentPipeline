@@ -167,9 +167,12 @@ def deploy_project_task(project_id, build_id, lock: threading.Lock):
 
             # ── Step 2: Build ──────────────────────────────────────────────
             append_log(build_id, "\n[Step 2/4] Building Docker image...\n")
+            df_dir = os.path.dirname(normalized_df)
+            build_context = os.path.join(project_dir, df_dir) if df_dir else project_dir
+            dockerfile_rel = os.path.basename(normalized_df) if df_dir else normalized_df
             success = run_cmd_with_logging(
-                ["docker", "build", "--progress=plain", "-t", project_name, "-f", normalized_df, "."],
-                build_id, cwd=project_dir, project_id=project_id
+                ["docker", "build", "--progress=plain", "-t", project_name, "-f", dockerfile_rel, "."],
+                build_id, cwd=build_context, project_id=project_id
             )
             if timed_out.is_set():
                 raise Exception("Build timed out after 5 minutes")
