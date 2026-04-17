@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import threading
 import shutil
@@ -180,15 +181,29 @@ def deploy_project_task(project_id, build_id, lock: threading.Lock):
                 raise Exception("docker build failed — check the Dockerfile and build output above")
 
             # ── Step 3: Run ────────────────────────────────────────────────
-            append_log(build_id, f"\n[Step 3/4] Starting container on port {project.port}...\n")
+            internal_port = project.internal_port or 5000
+            append_log(build_id, f"\n[Step 3/4] Starting container on port {project.port} (container port {internal_port})...\n")
+
+            env_dict = {}
+            try:
+                env_dict = json.loads(project.env_vars or '{}')
+            except Exception:
+                pass
+            if env_dict:
+                append_log(build_id, f"[env] Injecting {len(env_dict)} environment variable(s)\n")
+
             run_args = [
                 "docker", "run", "-d",
                 "--name", project_name,
-                "-p", f"{project.port}:5000",
+                "-p", f"{project.port}:{internal_port}",
+                "-e", f"PORT={internal_port}",
                 "--memory", "512m",
                 "--cpus", "0.5",
-                project_name
             ]
+            for key, value in env_dict.items():
+                run_args += ["-e", f"{key}={value}"]
+            run_args.append(project_name)
+
             success = run_cmd_with_logging(run_args, build_id, project_id=project_id)
             if timed_out.is_set():
                 raise Exception("Build timed out after 5 minutes")

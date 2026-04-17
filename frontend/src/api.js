@@ -51,8 +51,8 @@ export const getProjects = async () => {
   return res.data;
 };
 
-export const createProject = async (name, repo_url, dockerfile_path = 'Dockerfile') => {
-  const res = await api.post('/projects', { name, repo_url, dockerfile_path });
+export const createProject = async (name, repo_url, dockerfile_path = 'Dockerfile', internal_port = null, env_vars = {}) => {
+  const res = await api.post('/projects', { name, repo_url, dockerfile_path, internal_port, env_vars });
   return res.data;
 };
 
@@ -99,4 +99,9 @@ export const deleteProject = async (id) => {
 export const getSSEUrl = (projectId) => {
     const token = getAuthToken();
     return `${API_URL}/projects/${projectId}/logs?token=${token}`;
+}
+
+export const getRuntimeLogsUrl = (projectId) => {
+    const token = getAuthToken();
+    return `${API_URL}/projects/${projectId}/runtime-logs?token=${token}`;
 }

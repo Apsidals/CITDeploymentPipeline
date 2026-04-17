@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus, Rocket, X, Box, Activity, CircleOff
+  Plus, Rocket, X, Box, Activity, CircleOff, Trash2
 } from 'lucide-react';
 import { getProjects, createProject } from '../api';
 import { useToast } from '../toast';
@@ -57,10 +57,46 @@ function ProjectCard({ p }) {
   );
 }
 
+function EnvVarsEditor({ rows, onChange }) {
+  const addRow = () => onChange([...rows, { id: Date.now(), key: '', value: '' }]);
+  const removeRow = (id) => onChange(rows.filter((r) => r.id !== id));
+  const updateRow = (id, field, val) =>
+    onChange(rows.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
+
+  return (
+    <div className="env-editor">
+      {rows.map((r) => (
+        <div key={r.id} className="env-row">
+          <input
+            className="input mono env-key"
+            placeholder="VARIABLE_NAME"
+            value={r.key}
+            onChange={(e) => updateRow(r.id, 'key', e.target.value)}
+          />
+          <input
+            className="input mono env-val"
+            placeholder="value"
+            value={r.value}
+            onChange={(e) => updateRow(r.id, 'value', e.target.value)}
+          />
+          <button type="button" className="icon-btn" onClick={() => removeRow(r.id)} title="Remove">
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+      <button type="button" className="btn ghost sm" onClick={addRow} style={{ marginTop: 6 }}>
+        <Plus size={12} /> Add variable
+      </button>
+    </div>
+  );
+}
+
 function NewProjectModal({ open, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [repo, setRepo] = useState('');
   const [dockerfilePath, setDockerfilePath] = useState('');
+  const [internalPort, setInternalPort] = useState('');
+  const [envRows, setEnvRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -75,6 +111,8 @@ function NewProjectModal({ open, onClose, onCreated }) {
 
   const handleClose = () => {
     setDockerfilePath('');
+    setInternalPort('');
+    setEnvRows([]);
     onClose();
   };
 
@@ -82,11 +120,17 @@ function NewProjectModal({ open, onClose, onCreated }) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
+    const envVarsObj = {};
+    envRows.forEach(({ key, value }) => {
+      if (key.trim()) envVarsObj[key.trim()] = value;
+    });
     try {
       const proj = await createProject(
         name.trim(),
         repo.trim(),
-        dockerfilePath.trim() || 'Dockerfile'
+        dockerfilePath.trim() || 'Dockerfile',
+        internalPort ? parseInt(internalPort, 10) : null,
+        envVarsObj
       );
       toast('Deploy started', 'ok');
       onCreated(proj);
@@ -141,6 +185,24 @@ function NewProjectModal({ open, onClose, onCreated }) {
               onChange={(e) => setDockerfilePath(e.target.value)}
               placeholder="Dockerfile"
             />
+          </div>
+          <div className="field">
+            <label>
+              Container port <span className="dim">(optional — default 5000)</span>
+            </label>
+            <input
+              className="input mono"
+              type="number"
+              min="1"
+              max="65535"
+              value={internalPort}
+              onChange={(e) => setInternalPort(e.target.value)}
+              placeholder="5000"
+            />
+          </div>
+          <div className="field">
+            <label>Environment variables <span className="dim">(optional)</span></label>
+            <EnvVarsEditor rows={envRows} onChange={setEnvRows} />
           </div>
         </div>
         <div className="actions">

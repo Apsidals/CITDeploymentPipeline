@@ -1,4 +1,5 @@
 import os
+import subprocess
 import time
 from datetime import datetime
 from flask import Flask, request, jsonify, Response, g
@@ -38,7 +39,6 @@ with app.app_context():
     with db.engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.commit()
-    # One-time migration: add dockerfile_path column to existing databases
     inspector = inspect(db.engine)
     existing_cols = [c['name'] for c in inspector.get_columns('projects')]
     if 'dockerfile_path' not in existing_cols:
@@ -48,6 +48,16 @@ with app.app_context():
             ))
             conn.commit()
         print("[migrate] Added dockerfile_path column to projects table")
+    if 'internal_port' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN internal_port INTEGER NOT NULL DEFAULT 5000"))
+            conn.commit()
+        print("[migrate] Added internal_port column to projects table")
+    if 'env_vars' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN env_vars TEXT NOT NULL DEFAULT '{}'"))
+            conn.commit()
+        print("[migrate] Added env_vars column to projects table")
 
 # --- Middleware ---
 
@@ -194,16 +204,29 @@ def get_projects():
 @app.route('/projects', methods=['POST'])
 @require_auth
 def create_project():
+    import json as _json
     data = request.json
     name = data.get('name')
     repo_url = data.get('repo_url')
-    
+
     if not name or not repo_url:
         return jsonify({'error': 'name and repo_url required'}), 400
 
     dockerfile_path = (data.get('dockerfile_path') or 'Dockerfile').strip() or 'Dockerfile'
 
-    # Assign port (simple autoincrement from 5000)
+    raw_internal_port = data.get('internal_port')
+    try:
+        internal_port = int(raw_internal_port) if raw_internal_port else 5000
+    except (ValueError, TypeError):
+        internal_port = 5000
+
+    raw_env = data.get('env_vars') or {}
+    if isinstance(raw_env, dict):
+        env_vars_str = _json.dumps({str(k).strip(): str(v) for k, v in raw_env.items() if str(k).strip()})
+    else:
+        env_vars_str = '{}'
+
+    # Assign external port (auto-increment from 5000)
     max_port_proj = Project.query.order_by(Project.port.desc()).first()
     port = max_port_proj.port + 1 if max_port_proj and max_port_proj.port >= 5000 else 5000
 
@@ -212,12 +235,13 @@ def create_project():
         name=name,
         repo_url=repo_url,
         port=port,
-        dockerfile_path=dockerfile_path
+        dockerfile_path=dockerfile_path,
+        internal_port=internal_port,
+        env_vars=env_vars_str,
     )
     db.session.add(project)
     db.session.commit()
 
-    # Trigger first deploy (lock can't be held on a brand-new project)
     pipeline.trigger_deploy(project.id)
 
     return jsonify({
@@ -225,7 +249,9 @@ def create_project():
         'name': project.name,
         'port': project.port,
         'status': project.status,
-        'dockerfile_path': project.dockerfile_path
+        'dockerfile_path': project.dockerfile_path,
+        'internal_port': project.internal_port,
+        'env_vars': project.env_vars,
     }), 201
 
 @app.route('/projects/<project_id>', methods=['GET'])
@@ -240,6 +266,8 @@ def get_project(project):
         'status': project.status,
         'container_id': project.container_id,
         'dockerfile_path': project.dockerfile_path or 'Dockerfile',
+        'internal_port': project.internal_port or 5000,
+        'env_vars': project.env_vars or '{}',
         'created_at': project.created_at.isoformat()
     })
 
@@ -247,6 +275,7 @@ def get_project(project):
 @require_auth
 @require_project_owner
 def update_project(project):
+    import json as _json
     data = request.json or {}
     if 'name' in data:
         name = data['name'].strip()
@@ -255,11 +284,24 @@ def update_project(project):
     if 'dockerfile_path' in data:
         path = (data['dockerfile_path'] or 'Dockerfile').strip() or 'Dockerfile'
         project.dockerfile_path = path
+    if 'internal_port' in data:
+        try:
+            project.internal_port = int(data['internal_port']) if data['internal_port'] else 5000
+        except (ValueError, TypeError):
+            project.internal_port = 5000
+    if 'env_vars' in data:
+        raw_env = data['env_vars']
+        if isinstance(raw_env, dict):
+            project.env_vars = _json.dumps({str(k).strip(): str(v) for k, v in raw_env.items() if str(k).strip()})
+        else:
+            project.env_vars = '{}'
     db.session.commit()
     return jsonify({
         'id': project.id,
         'name': project.name,
-        'dockerfile_path': project.dockerfile_path
+        'dockerfile_path': project.dockerfile_path,
+        'internal_port': project.internal_port or 5000,
+        'env_vars': project.env_vars or '{}',
     })
 
 @app.route('/projects/<project_id>', methods=['DELETE'])
@@ -374,6 +416,59 @@ def stream_logs(project_id):
                 time.sleep(1)
 
     return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/projects/<project_id>/runtime-logs', methods=['GET'])
+def stream_runtime_logs(project_id):
+    token = request.args.get('token')
+    if not token:
+        return jsonify({'error': 'Unauthorized'}), 401
+    session = Session.query.filter_by(token=token).first()
+    if not session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    user = User.query.get(session.user_id)
+
+    project = Project.query.get(project_id)
+    if not project or project.user_id != user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    project_name = f"cit-deploy-{project.id[:8]}"
+
+    def generate():
+        inspect_result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", project_name],
+            capture_output=True, text=True
+        )
+        if inspect_result.returncode != 0 or inspect_result.stdout.strip() != 'true':
+            yield "data: Container is not currently running.\n\n"
+            yield "event: done\ndata: \n\n"
+            return
+
+        yield "data: Connected to runtime logs\n\n"
+
+        process = subprocess.Popen(
+            ["docker", "logs", "--follow", "--tail", "100", project_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            encoding='utf-8',
+            errors='replace'
+        )
+        try:
+            for line in process.stdout:
+                line = line.rstrip('\n')
+                if line:
+                    yield f"data: {line}\n\n"
+        except GeneratorExit:
+            process.kill()
+            return
+        finally:
+            process.wait()
+
+        yield "event: done\ndata: Container stopped.\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
 
 if __name__ == '__main__':
     app.run(port=8000, debug=True)

@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Play, Square, RotateCw, Trash2, ExternalLink, ArrowLeft, Copy,
-  Terminal as TerminalIcon, History, Check, Download, Trash, Pencil
+  Terminal as TerminalIcon, History, Check, Download, Trash, Pencil, Plus, Settings2
 } from 'lucide-react';
 import {
   getProject, getProjectBuilds, deployProject, stopProject, restartProject,
-  deleteProject, getSSEUrl, updateProject
+  deleteProject, getSSEUrl, getRuntimeLogsUrl, updateProject
 } from '../api';
 import { useToast } from '../toast';
 
@@ -49,12 +49,60 @@ function classifyLine(text) {
   return '';
 }
 
-/* -------------------- Terminal -------------------- */
+/* -------------------- EnvVarsEditor -------------------- */
 
-function Terminal({ lines, connected, onClear }) {
+function EnvVarsEditor({ rows, onChange }) {
+  const addRow = () => onChange([...rows, { id: Date.now(), key: '', value: '' }]);
+  const removeRow = (id) => onChange(rows.filter((r) => r.id !== id));
+  const updateRow = (id, field, val) =>
+    onChange(rows.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
+
+  return (
+    <div className="env-editor">
+      {rows.map((r) => (
+        <div key={r.id} className="env-row">
+          <input
+            className="input mono env-key"
+            placeholder="VARIABLE_NAME"
+            value={r.key}
+            onChange={(e) => updateRow(r.id, 'key', e.target.value)}
+          />
+          <input
+            className="input mono env-val"
+            placeholder="value"
+            value={r.value}
+            onChange={(e) => updateRow(r.id, 'value', e.target.value)}
+          />
+          <button type="button" className="icon-btn" onClick={() => removeRow(r.id)} title="Remove">
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+      <button type="button" className="btn ghost sm" onClick={addRow} style={{ marginTop: 6 }}>
+        <Plus size={12} /> Add variable
+      </button>
+    </div>
+  );
+}
+
+/* -------------------- LogPanel -------------------- */
+
+function LogPanel({
+  logTab, setLogTab,
+  deployLines, setDeployLines, deployStreaming,
+  runtimeLines, setRuntimeLines, runtimeStreaming,
+  isRunning,
+}) {
   const scrollRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const toast = useToast();
+
+  const lines = logTab === 'deploy' ? deployLines : runtimeLines;
+  const streaming = logTab === 'deploy' ? deployStreaming : runtimeStreaming;
+  const label = logTab === 'deploy' ? 'build.log' : 'runtime.log';
+  const placeholder = logTab === 'deploy'
+    ? 'Waiting for logs — trigger a deploy to see output here.'
+    : isRunning ? 'Connecting to runtime logs…' : 'Container is not running.';
 
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
@@ -76,37 +124,49 @@ function Terminal({ lines, connected, onClear }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `build-logs-${Date.now()}.txt`;
+    a.download = `${label}-${Date.now()}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const clear = () => logTab === 'deploy' ? setDeployLines([]) : setRuntimeLines([]);
+
   return (
-    <div className="terminal-wrap">
-      <div className="terminal-head">
-        <div className="lights">
-          <span /><span /><span />
+    <div className="log-panel">
+      <div className="log-panel-head">
+        <div className="log-panel-left">
+          <TerminalIcon size={14} />
+          <span className="log-panel-label">{label}</span>
+          {streaming && (
+            <span className="status running" style={{ fontSize: 10, padding: '2px 7px' }}>
+              <span className="dot" />live
+            </span>
+          )}
         </div>
-        <div className="title">
-          <TerminalIcon size={13} />
-          build.log {connected && <span className="status running" style={{ fontSize: 10, padding: '2px 6px' }}><span className="dot" />live</span>}
+        <div className="log-seg">
+          <button
+            className={`log-seg-btn ${logTab === 'deploy' ? 'active' : ''}`}
+            onClick={() => setLogTab('deploy')}
+          >
+            Deploy
+          </button>
+          <button
+            className={`log-seg-btn ${logTab === 'runtime' ? 'active' : ''}`}
+            onClick={() => setLogTab('runtime')}
+          >
+            Runtime
+          </button>
         </div>
-        <div className="tools">
-          <button className="icon-btn" onClick={copy} title="Copy logs">
-            <Copy />
-          </button>
-          <button className="icon-btn" onClick={download} title="Download">
-            <Download />
-          </button>
-          <button className="icon-btn" onClick={onClear} title="Clear view">
-            <Trash />
-          </button>
+        <div className="log-panel-tools">
+          <button className="icon-btn" onClick={copy} title="Copy logs"><Copy /></button>
+          <button className="icon-btn" onClick={download} title="Download"><Download /></button>
+          <button className="icon-btn" onClick={clear} title="Clear"><Trash /></button>
         </div>
       </div>
 
       <div className="terminal" ref={scrollRef}>
         {lines.length === 0 ? (
-          <div className="placeholder">Waiting for logs — trigger a deploy to see output stream here.</div>
+          <div className="placeholder">{placeholder}</div>
         ) : (
           lines.map((l, i) => (
             <div className="line" key={i}>
@@ -119,11 +179,7 @@ function Terminal({ lines, connected, onClear }) {
 
       <div className="terminal-foot">
         <label>
-          <input
-            type="checkbox"
-            checked={autoScroll}
-            onChange={(e) => setAutoScroll(e.target.checked)}
-          />
+          <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
           Auto-scroll
         </label>
         <span>{lines.length} line{lines.length === 1 ? '' : 's'}</span>
@@ -184,14 +240,47 @@ export default function ProjectDetails() {
 
   const [project, setProject] = useState(null);
   const [builds, setBuilds] = useState([]);
-  const [lines, setLines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [streaming, setStreaming] = useState(false);
+
+  // Deploy log state
+  const [deployLines, setDeployLines] = useState([]);
+  const [deployStreaming, setDeployStreaming] = useState(false);
+  const deployEsRef = useRef(null);
+
+  // Runtime log state
+  const [runtimeLines, setRuntimeLines] = useState([]);
+  const [runtimeStreaming, setRuntimeStreaming] = useState(false);
+  const runtimeEsRef = useRef(null);
+
+  // Active log tab
+  const [logTab, setLogTab] = useState('deploy');
+
+  // Inline editing
   const [editingDockerfile, setEditingDockerfile] = useState(false);
   const [dockerfileInput, setDockerfileInput] = useState('');
+  const [editingInternalPort, setEditingInternalPort] = useState(false);
+  const [internalPortInput, setInternalPortInput] = useState('');
 
-  const esRef = useRef(null);
+  // Env vars
+  const [envRows, setEnvRows] = useState([]);
+  const [envDirty, setEnvDirty] = useState(false);
+  const [envSaved, setEnvSaved] = useState(false);
+
+  const parseEnvVars = (jsonStr) => {
+    try {
+      const obj = JSON.parse(jsonStr || '{}');
+      return Object.entries(obj).map(([key, value]) => ({ id: `${key}-${Date.now()}`, key, value }));
+    } catch {
+      return [];
+    }
+  };
+
+  const envRowsToObj = (rows) => {
+    const obj = {};
+    rows.forEach(({ key, value }) => { if (key.trim()) obj[key.trim()] = value; });
+    return obj;
+  };
 
   const saveDockerfilePath = useCallback(async () => {
     setEditingDockerfile(false);
@@ -206,10 +295,40 @@ export default function ProjectDetails() {
     }
   }, [dockerfileInput, project, id, toast]);
 
+  const saveInternalPort = useCallback(async () => {
+    setEditingInternalPort(false);
+    const val = parseInt(internalPortInput, 10) || 5000;
+    if (val === (project?.internal_port || 5000)) return;
+    try {
+      await updateProject(id, { internal_port: val });
+      setProject((p) => ({ ...p, internal_port: val }));
+      toast('Container port updated', 'ok');
+    } catch {
+      toast('Failed to update container port', 'err');
+    }
+  }, [internalPortInput, project, id, toast]);
+
+  const saveEnvVars = async () => {
+    try {
+      await updateProject(id, { env_vars: envRowsToObj(envRows) });
+      setEnvDirty(false);
+      setEnvSaved(true);
+      setTimeout(() => setEnvSaved(false), 3000);
+      toast('Environment variables saved', 'ok');
+    } catch {
+      toast('Failed to save environment variables', 'err');
+    }
+  };
+
   const loadProject = useCallback(async () => {
     try {
       const p = await getProject(id);
       setProject(p);
+      setEnvRows((prev) => {
+        // Only overwrite env rows if not currently editing
+        if (prev.length === 0) return parseEnvVars(p.env_vars);
+        return prev;
+      });
       const bs = await getProjectBuilds(id).catch(() => []);
       setBuilds(bs);
     } catch (e) {
@@ -219,43 +338,82 @@ export default function ProjectDetails() {
     }
   }, [id]);
 
-  const connectLogStream = useCallback(() => {
-    if (esRef.current) esRef.current.close();
-    setLines([]);
+  const connectDeployStream = useCallback(() => {
+    if (deployEsRef.current) deployEsRef.current.close();
+    setDeployLines([]);
     const es = new EventSource(getSSEUrl(id));
-    setStreaming(true);
+    setDeployStreaming(true);
 
     es.onmessage = (event) => {
-      setLines((prev) => {
+      setDeployLines((prev) => {
         const next = [...prev, { text: event.data, cls: classifyLine(event.data) }];
         return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
       });
     };
     es.addEventListener('done', () => {
       es.close();
-      setStreaming(false);
+      setDeployStreaming(false);
       loadProject();
     });
     es.onerror = () => {
       es.close();
-      setStreaming(false);
+      setDeployStreaming(false);
     };
-    esRef.current = es;
+    deployEsRef.current = es;
   }, [id, loadProject]);
+
+  const connectRuntimeStream = useCallback(() => {
+    if (runtimeEsRef.current) runtimeEsRef.current.close();
+    setRuntimeLines([]);
+    const es = new EventSource(getRuntimeLogsUrl(id));
+    setRuntimeStreaming(true);
+
+    es.onmessage = (event) => {
+      setRuntimeLines((prev) => {
+        const next = [...prev, { text: event.data, cls: classifyLine(event.data) }];
+        return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
+      });
+    };
+    es.addEventListener('done', () => {
+      es.close();
+      setRuntimeStreaming(false);
+    });
+    es.onerror = () => {
+      es.close();
+      setRuntimeStreaming(false);
+    };
+    runtimeEsRef.current = es;
+  }, [id]);
 
   useEffect(() => {
     loadProject();
-    return () => esRef.current?.close();
+    return () => {
+      deployEsRef.current?.close();
+      runtimeEsRef.current?.close();
+    };
   }, [loadProject]);
 
-  // Auto-connect stream when status is building
+  // Auto-connect deploy stream when building
   useEffect(() => {
-    if (project?.status === 'building' && (!esRef.current || esRef.current.readyState === EventSource.CLOSED)) {
-      connectLogStream();
+    if (project?.status === 'building' && (!deployEsRef.current || deployEsRef.current.readyState === EventSource.CLOSED)) {
+      connectDeployStream();
     }
-  }, [project, connectLogStream]);
+  }, [project, connectDeployStream]);
 
-  // Soft-poll project state during build
+  // Auto-connect runtime stream when tab is active and container is running
+  useEffect(() => {
+    if (logTab === 'runtime' && project?.status === 'running') {
+      if (!runtimeEsRef.current || runtimeEsRef.current.readyState === EventSource.CLOSED) {
+        connectRuntimeStream();
+      }
+    }
+    if (logTab !== 'runtime') {
+      runtimeEsRef.current?.close();
+      setRuntimeStreaming(false);
+    }
+  }, [logTab, project?.status, connectRuntimeStream]);
+
+  // Soft-poll during build
   useEffect(() => {
     if (project?.status !== 'building') return;
     const t = setInterval(loadProject, 3500);
@@ -266,7 +424,10 @@ export default function ProjectDetails() {
     try {
       await fn(id);
       if (okMsg) toast(okMsg, 'ok');
-      if (fn === deployProject) connectLogStream();
+      if (fn === deployProject) {
+        connectDeployStream();
+        setLogTab('deploy');
+      }
       loadProject();
     } catch (err) {
       if (err?.response?.status === 409) {
@@ -375,8 +536,45 @@ export default function ProjectDetails() {
           </a>
         </div>
         <div className="meta">
-          <span className="k">Port</span>
+          <span className="k">Ext. port</span>
           <span className="v mono">{project.port}</span>
+        </div>
+        <div className="meta">
+          <span className="k">Container port</span>
+          <span className="v mono" style={{ gap: 6 }}>
+            {editingInternalPort ? (
+              <input
+                className="input mono"
+                style={{ padding: '2px 8px', fontSize: 12, height: 26, width: 70 }}
+                type="number"
+                min="1"
+                max="65535"
+                value={internalPortInput}
+                onChange={(e) => setInternalPortInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveInternalPort();
+                  if (e.key === 'Escape') setEditingInternalPort(false);
+                }}
+                onBlur={saveInternalPort}
+                autoFocus
+              />
+            ) : (
+              <>
+                <span>{project.internal_port || 5000}</span>
+                <button
+                  className="icon-btn"
+                  style={{ width: 22, height: 22 }}
+                  onClick={() => {
+                    setInternalPortInput(String(project.internal_port || 5000));
+                    setEditingInternalPort(true);
+                  }}
+                  title="Edit container port"
+                >
+                  <Pencil size={11} />
+                </button>
+              </>
+            )}
+          </span>
         </div>
         <div className="meta">
           <span className="k">Container</span>
@@ -432,13 +630,42 @@ export default function ProjectDetails() {
         </div>
       </div>
 
-      <Terminal
-        lines={lines}
-        connected={streaming}
-        onClear={() => setLines([])}
+      <LogPanel
+        logTab={logTab}
+        setLogTab={setLogTab}
+        deployLines={deployLines}
+        setDeployLines={setDeployLines}
+        deployStreaming={deployStreaming}
+        runtimeLines={runtimeLines}
+        setRuntimeLines={setRuntimeLines}
+        runtimeStreaming={runtimeStreaming}
+        isRunning={isRunning}
       />
 
       <BuildHistory builds={builds} />
+
+      <div className="env-section">
+        <div className="env-section-head">
+          <div className="row">
+            <Settings2 size={15} color="var(--fg-2)" />
+            <h3>Environment variables</h3>
+          </div>
+          {envSaved && <span className="env-saved"><Check size={11} /> Saved</span>}
+        </div>
+        <div className="env-body">
+          <EnvVarsEditor
+            rows={envRows}
+            onChange={(rows) => { setEnvRows(rows); setEnvDirty(true); setEnvSaved(false); }}
+          />
+        </div>
+        <div className="env-section-foot">
+          {envDirty && <span className="env-notice">Redeploy required for changes to take effect</span>}
+          <button className="btn sm" onClick={saveEnvVars} disabled={!envDirty}>
+            Save variables
+          </button>
+        </div>
+      </div>
+
     </div>
   );
 }

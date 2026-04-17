@@ -640,11 +640,6 @@ p { margin: 0; color: var(--fg-1); }
 /* ------------------------------ Terminal ------------------------------ */
 
 .terminal-wrap {
-  margin-top: 24px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -652,28 +647,24 @@ p { margin: 0; color: var(--fg-1); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 12px 16px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
-  gap: 10px;
 }
-.terminal-head .lights { display: flex; gap: 6px; }
-.terminal-head .lights span {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--bg-3);
-}
-.terminal-head .title {
-  font-size: 12px;
-  color: var(--fg-2);
-  font-family: var(--font-mono);
-  flex: 1;
-  text-align: center;
+.terminal-head-left {
   display: flex;
-  justify-content: center;
   align-items: center;
   gap: 8px;
+  color: var(--fg-2);
 }
-.terminal-head .tools { display: flex; gap: 2px; align-items: center; }
+.terminal-head-left svg { flex-shrink: 0; }
+.terminal-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-1);
+}
+.terminal-head-right { display: flex; gap: 2px; align-items: center; }
 
 .terminal {
   background: #050507;
@@ -740,6 +731,7 @@ p { margin: 0; color: var(--fg-1); }
 }
 .builds-head {
   padding: 14px 18px;
+  background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;

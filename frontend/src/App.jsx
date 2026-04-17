@@ -8,6 +8,7 @@ import OAuthCallback from './pages/OAuthCallback';
 import { getAuthToken, fetchMe, logout } from './api';
 import { ToastProvider } from './toast';
 import './index.css';
+import './App.css';
 
 /* -------------------- Shell -------------------- */
 

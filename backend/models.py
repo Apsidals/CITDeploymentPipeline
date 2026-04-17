@@ -28,6 +28,8 @@ class Project(db.Model):
     status = db.Column(db.String(50), default='stopped') # running, stopped, errored, building
     container_id = db.Column(db.String(100))
     dockerfile_path = db.Column(db.String(256), nullable=False, default='Dockerfile')
+    internal_port = db.Column(db.Integer, default=5000)
+    env_vars = db.Column(db.Text, default='{}')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     builds = db.relationship('Build', backref='project', lazy=True, cascade='all, delete-orphan')
