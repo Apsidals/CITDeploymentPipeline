@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify, Response, g
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from dotenv import load_dotenv
+from sqlalchemy import inspect, text
 import requests
 import queue
 import threading
@@ -22,11 +23,31 @@ CORS(app, supports_credentials=True)
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'cit_deploy.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Allow concurrent reads (SSE) and writes (pipeline) without blocking each other.
+# timeout=20 means SQLite will retry for 20s before raising "database is locked".
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'connect_args': {'timeout': 20, 'check_same_thread': False}
+}
 
 db.init_app(app)
 
 with app.app_context():
     db.create_all()
+    # Enable WAL journal mode — this is the real fix for the SSE/pipeline lock contention.
+    # WAL lets readers and writers coexist without blocking each other.
+    with db.engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.commit()
+    # One-time migration: add dockerfile_path column to existing databases
+    inspector = inspect(db.engine)
+    existing_cols = [c['name'] for c in inspector.get_columns('projects')]
+    if 'dockerfile_path' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE projects ADD COLUMN dockerfile_path VARCHAR(256) NOT NULL DEFAULT 'Dockerfile'"
+            ))
+            conn.commit()
+        print("[migrate] Added dockerfile_path column to projects table")
 
 # --- Middleware ---
 
@@ -179,23 +200,32 @@ def create_project():
     
     if not name or not repo_url:
         return jsonify({'error': 'name and repo_url required'}), 400
-        
+
+    dockerfile_path = (data.get('dockerfile_path') or 'Dockerfile').strip() or 'Dockerfile'
+
     # Assign port (simple autoincrement from 5000)
     max_port_proj = Project.query.order_by(Project.port.desc()).first()
     port = max_port_proj.port + 1 if max_port_proj and max_port_proj.port >= 5000 else 5000
-    
-    project = Project(user_id=g.user.id, name=name, repo_url=repo_url, port=port)
+
+    project = Project(
+        user_id=g.user.id,
+        name=name,
+        repo_url=repo_url,
+        port=port,
+        dockerfile_path=dockerfile_path
+    )
     db.session.add(project)
     db.session.commit()
-    
-    # Trigger first deploy
+
+    # Trigger first deploy (lock can't be held on a brand-new project)
     pipeline.trigger_deploy(project.id)
-    
+
     return jsonify({
         'id': project.id,
         'name': project.name,
         'port': project.port,
-        'status': project.status
+        'status': project.status,
+        'dockerfile_path': project.dockerfile_path
     }), 201
 
 @app.route('/projects/<project_id>', methods=['GET'])
@@ -209,7 +239,27 @@ def get_project(project):
         'port': project.port,
         'status': project.status,
         'container_id': project.container_id,
+        'dockerfile_path': project.dockerfile_path or 'Dockerfile',
         'created_at': project.created_at.isoformat()
+    })
+
+@app.route('/projects/<project_id>', methods=['PATCH'])
+@require_auth
+@require_project_owner
+def update_project(project):
+    data = request.json or {}
+    if 'name' in data:
+        name = data['name'].strip()
+        if name:
+            project.name = name
+    if 'dockerfile_path' in data:
+        path = (data['dockerfile_path'] or 'Dockerfile').strip() or 'Dockerfile'
+        project.dockerfile_path = path
+    db.session.commit()
+    return jsonify({
+        'id': project.id,
+        'name': project.name,
+        'dockerfile_path': project.dockerfile_path
     })
 
 @app.route('/projects/<project_id>', methods=['DELETE'])
@@ -229,6 +279,8 @@ def delete_project(project):
 @require_project_owner
 def deploy_project(project):
     build_id = pipeline.trigger_deploy(project.id)
+    if build_id is None:
+        return jsonify({'error': 'A deploy is already in progress for this project'}), 409
     return jsonify({'success': True, 'build_id': build_id}), 202
 
 @app.route('/projects/<project_id>/stop', methods=['POST'])

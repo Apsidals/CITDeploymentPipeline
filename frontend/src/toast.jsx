@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useState } from 'react';
-import { CheckCircle2, XCircle, Info } from 'lucide-react';
+import { CheckCircle2, XCircle, Info, AlertTriangle } from 'lucide-react';
 
 const ToastCtx = createContext(null);
 
@@ -17,10 +17,11 @@ export function ToastProvider({ children }) {
       {children}
       <div className="toast-stack">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.type === 'err' ? 'err' : t.type === 'ok' ? 'ok' : ''}`}>
+          <div key={t.id} className={`toast ${t.type === 'err' ? 'err' : t.type === 'ok' ? 'ok' : t.type === 'warn' ? 'warn' : ''}`}>
             {t.type === 'ok' ? <CheckCircle2 size={15} color="var(--ok)" /> :
               t.type === 'err' ? <XCircle size={15} color="var(--err)" /> :
-                <Info size={15} color="var(--fg-2)" />}
+                t.type === 'warn' ? <AlertTriangle size={15} color="var(--warn)" /> :
+                  <Info size={15} color="var(--fg-2)" />}
             <span>{t.msg}</span>
           </div>
         ))}

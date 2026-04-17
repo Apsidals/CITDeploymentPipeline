@@ -60,6 +60,7 @@ function ProjectCard({ p }) {
 function NewProjectModal({ open, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [repo, setRepo] = useState('');
+  const [dockerfilePath, setDockerfilePath] = useState('');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -72,12 +73,21 @@ function NewProjectModal({ open, onClose, onCreated }) {
 
   if (!open) return null;
 
+  const handleClose = () => {
+    setDockerfilePath('');
+    onClose();
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     try {
-      const proj = await createProject(name.trim(), repo.trim());
+      const proj = await createProject(
+        name.trim(),
+        repo.trim(),
+        dockerfilePath.trim() || 'Dockerfile'
+      );
       toast('Deploy started', 'ok');
       onCreated(proj);
     } catch (err) {
@@ -88,7 +98,7 @@ function NewProjectModal({ open, onClose, onCreated }) {
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={handleClose}>
       <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <div className="head">
           <div>
@@ -97,7 +107,7 @@ function NewProjectModal({ open, onClose, onCreated }) {
               We'll clone, build, and run your repo in a container.
             </p>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+          <button type="button" className="icon-btn" onClick={handleClose} aria-label="Close">
             <X />
           </button>
         </div>
@@ -123,9 +133,18 @@ function NewProjectModal({ open, onClose, onCreated }) {
               placeholder="https://github.com/username/repo.git"
             />
           </div>
+          <div className="field">
+            <label>Dockerfile path <span className="dim">(optional)</span></label>
+            <input
+              className="input mono"
+              value={dockerfilePath}
+              onChange={(e) => setDockerfilePath(e.target.value)}
+              placeholder="Dockerfile"
+            />
+          </div>
         </div>
         <div className="actions">
-          <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+          <button type="button" className="btn ghost" onClick={handleClose} disabled={busy}>
             Cancel
           </button>
           <button type="submit" className="btn primary" disabled={busy || !name || !repo}>

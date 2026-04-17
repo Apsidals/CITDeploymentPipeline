@@ -51,8 +51,13 @@ export const getProjects = async () => {
   return res.data;
 };
 
-export const createProject = async (name, repo_url) => {
-  const res = await api.post('/projects', { name, repo_url });
+export const createProject = async (name, repo_url, dockerfile_path = 'Dockerfile') => {
+  const res = await api.post('/projects', { name, repo_url, dockerfile_path });
+  return res.data;
+};
+
+export const updateProject = async (id, data) => {
+  const res = await api.patch(`/projects/${id}`, data);
   return res.data;
 };
 

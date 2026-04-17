@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Play, Square, RotateCw, Trash2, ExternalLink, ArrowLeft, Copy,
-  Terminal as TerminalIcon, History, Check, Download, Trash
+  Terminal as TerminalIcon, History, Check, Download, Trash, Pencil
 } from 'lucide-react';
 import {
   getProject, getProjectBuilds, deployProject, stopProject, restartProject,
-  deleteProject, getSSEUrl
+  deleteProject, getSSEUrl, updateProject
 } from '../api';
 import { useToast } from '../toast';
 
@@ -188,8 +188,23 @@ export default function ProjectDetails() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [editingDockerfile, setEditingDockerfile] = useState(false);
+  const [dockerfileInput, setDockerfileInput] = useState('');
 
   const esRef = useRef(null);
+
+  const saveDockerfilePath = useCallback(async () => {
+    setEditingDockerfile(false);
+    const val = dockerfileInput.trim() || 'Dockerfile';
+    if (val === (project?.dockerfile_path || 'Dockerfile')) return;
+    try {
+      await updateProject(id, { dockerfile_path: val });
+      setProject((p) => ({ ...p, dockerfile_path: val }));
+      toast('Dockerfile path updated', 'ok');
+    } catch {
+      toast('Failed to update Dockerfile path', 'err');
+    }
+  }, [dockerfileInput, project, id, toast]);
 
   const loadProject = useCallback(async () => {
     try {
@@ -253,8 +268,12 @@ export default function ProjectDetails() {
       if (okMsg) toast(okMsg, 'ok');
       if (fn === deployProject) connectLogStream();
       loadProject();
-    } catch {
-      toast('Action failed', 'err');
+    } catch (err) {
+      if (err?.response?.status === 409) {
+        toast('Deploy already in progress', 'warn');
+      } else {
+        toast('Action failed', 'err');
+      }
     }
   };
 
@@ -368,6 +387,40 @@ export default function ProjectDetails() {
         <div className="meta">
           <span className="k">Created</span>
           <span className="v">{relTime(project.created_at)}</span>
+        </div>
+        <div className="meta">
+          <span className="k">Dockerfile</span>
+          <span className="v mono" style={{ gap: 6 }}>
+            {editingDockerfile ? (
+              <input
+                className="input mono"
+                style={{ padding: '2px 8px', fontSize: 12, height: 26 }}
+                value={dockerfileInput}
+                onChange={(e) => setDockerfileInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveDockerfilePath();
+                  if (e.key === 'Escape') setEditingDockerfile(false);
+                }}
+                onBlur={saveDockerfilePath}
+                autoFocus
+              />
+            ) : (
+              <>
+                <span className="truncate">{project.dockerfile_path || 'Dockerfile'}</span>
+                <button
+                  className="icon-btn"
+                  style={{ width: 22, height: 22 }}
+                  onClick={() => {
+                    setDockerfileInput(project.dockerfile_path || 'Dockerfile');
+                    setEditingDockerfile(true);
+                  }}
+                  title="Edit Dockerfile path"
+                >
+                  <Pencil size={11} />
+                </button>
+              </>
+            )}
+          </span>
         </div>
         <div className="meta">
           <span className="k">Actions</span>
