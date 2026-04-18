@@ -702,6 +702,8 @@ def get_teams():
 @app.route('/teams', methods=['POST'])
 @require_auth
 def create_team():
+    if not g.user.is_admin:
+        return jsonify({'error': 'Only admins can create teams'}), 403
     data = request.json or {}
     name = (data.get('name') or '').strip()
     if not name:
@@ -745,6 +747,9 @@ def delete_team(team_id):
     membership = TeamMember.query.filter_by(team_id=team_id, user_id=g.user.id).first()
     if not g.user.is_admin and (not membership or membership.role != 'admin'):
         return jsonify({'error': 'Forbidden'}), 403
+    for p in team.projects:
+        p.team_id = None
+    db.session.flush()
     db.session.delete(team)
     db.session.commit()
     return jsonify({'success': True})
@@ -828,6 +833,266 @@ def search_users():
         'name': u.name,
         'avatar_url': u.avatar_url,
     } for u in users])
+
+
+# --- Admin Endpoints ---
+
+@app.route('/admin/stats', methods=['GET'])
+@require_auth
+@require_admin
+def admin_stats():
+    return jsonify({
+        'users':    User.query.count(),
+        'projects': Project.query.count(),
+        'teams':    Team.query.count(),
+        'running':  Project.query.filter_by(status='running').count(),
+        'building': Project.query.filter_by(status='building').count(),
+        'errored':  Project.query.filter_by(status='errored').count(),
+    })
+
+
+@app.route('/admin/projects', methods=['GET'])
+@require_auth
+@require_admin
+def admin_projects():
+    projects = Project.query.order_by(Project.created_at.desc()).all()
+    result = []
+    for p in projects:
+        owner = User.query.get(p.user_id)
+        build_count = Build.query.filter_by(project_id=p.id).count()
+        result.append({
+            'id': p.id,
+            'name': p.name,
+            'repo_url': p.repo_url,
+            'port': p.port,
+            'status': p.status,
+            'container_id': p.container_id,
+            'dockerfile_path': p.dockerfile_path or 'Dockerfile',
+            'internal_port': p.internal_port or 5000,
+            'env_vars': p.env_vars or '{}',
+            'created_at': p.created_at.isoformat(),
+            'user_id': p.user_id,
+            'owner_username': owner.username if owner else None,
+            'team_id': p.team_id,
+            'team_name': p.team.name if p.team_id and p.team else None,
+            'build_count': build_count,
+        })
+    return jsonify(result)
+
+
+@app.route('/admin/users', methods=['GET'])
+@require_auth
+@require_admin
+def admin_users():
+    users = User.query.order_by(User.created_at.asc()).all()
+    result = []
+    for u in users:
+        result.append({
+            'id': u.id,
+            'username': u.username,
+            'name': u.name,
+            'email': u.email,
+            'avatar_url': u.avatar_url,
+            'is_admin': u.is_admin,
+            'github_connected': u.github_id is not None,
+            'has_password': u.password_hash is not None,
+            'project_count': Project.query.filter_by(user_id=u.id).count(),
+            'created_at': u.created_at.isoformat(),
+        })
+    return jsonify(result)
+
+
+@app.route('/admin/teams', methods=['GET'])
+@require_auth
+@require_admin
+def admin_teams():
+    teams = Team.query.order_by(Team.created_at.desc()).all()
+    result = []
+    for t in teams:
+        creator = User.query.get(t.created_by)
+        result.append({
+            'id': t.id,
+            'name': t.name,
+            'created_by': t.created_by,
+            'created_by_username': creator.username if creator else None,
+            'member_count': len(t.members),
+            'project_count': Project.query.filter_by(team_id=t.id).count(),
+            'created_at': t.created_at.isoformat(),
+            'members': [_member_dict(m) for m in t.members],
+        })
+    return jsonify(result)
+
+
+@app.route('/admin/resources', methods=['GET'])
+@require_auth
+@require_admin
+def admin_resources():
+    def parse_mem_mb(s):
+        s = s.strip()
+        if 'GiB' in s: return float(s.replace('GiB', '').strip()) * 1024
+        if 'MiB' in s: return float(s.replace('MiB', '').strip())
+        if 'KiB' in s: return float(s.replace('KiB', '').strip()) / 1024
+        return 0.0
+
+    try:
+        result = subprocess.run(
+            ['docker', 'stats', '--no-stream', '--format',
+             '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'],
+            capture_output=True, text=True, timeout=15
+        )
+        name_to_project = {f"cit-deploy-{p.id[:8]}": p for p in Project.query.all()}
+        containers = []
+        total_cpu = 0.0
+        total_mem_used = 0.0
+        total_mem_limit = 0.0
+
+        for line in (result.stdout or '').strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) < 4:
+                continue
+            name, cpu_str, mem_str, mem_pct_str = parts
+            cpu_pct = float(cpu_str.replace('%', '') or 0)
+            mem_parts = mem_str.split('/')
+            mem_used_mb = parse_mem_mb(mem_parts[0]) if mem_parts else 0
+            mem_limit_mb = parse_mem_mb(mem_parts[1]) if len(mem_parts) > 1 else 0
+            mem_pct = float(mem_pct_str.replace('%', '') or 0)
+            proj = name_to_project.get(name)
+            total_cpu += cpu_pct
+            total_mem_used += mem_used_mb
+            total_mem_limit += mem_limit_mb
+            containers.append({
+                'container_name': name,
+                'project_id': proj.id if proj else None,
+                'project_name': proj.name if proj else name,
+                'cpu_pct': round(cpu_pct, 2),
+                'mem_used_mb': round(mem_used_mb, 1),
+                'mem_limit_mb': round(mem_limit_mb, 1),
+                'mem_pct': round(mem_pct, 2),
+            })
+        return jsonify({
+            'containers': containers,
+            'totals': {
+                'cpu_pct': round(total_cpu, 2),
+                'mem_used_mb': round(total_mem_used, 1),
+                'mem_limit_mb': round(total_mem_limit, 1),
+            },
+        })
+    except Exception as e:
+        return jsonify({'containers': [], 'totals': {'cpu_pct': 0, 'mem_used_mb': 0, 'mem_limit_mb': 0}, 'error': str(e)})
+
+
+@app.route('/admin/users/<user_id>', methods=['PATCH'])
+@require_auth
+@require_admin
+def admin_update_user(user_id):
+    if user_id == g.user.id:
+        return jsonify({'error': 'Cannot modify your own admin status here'}), 400
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    data = request.json or {}
+    if 'is_admin' in data:
+        user.is_admin = bool(data['is_admin'])
+        db.session.commit()
+    return jsonify(_user_dict(user))
+
+
+@app.route('/admin/users/<user_id>/password', methods=['PATCH'])
+@require_auth
+@require_admin
+def admin_set_password(user_id):
+    if user_id == g.user.id:
+        return jsonify({'error': 'Use the profile page to change your own password'}), 400
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    data = request.json or {}
+    password = data.get('password') or ''
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    user.password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/admin/users/<user_id>', methods=['DELETE'])
+@require_auth
+@require_admin
+def admin_delete_user(user_id):
+    if user_id == g.user.id:
+        return jsonify({'error': 'Cannot delete your own account'}), 400
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    Session.query.filter_by(user_id=user_id).delete()
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/admin/projects/<project_id>/deploy', methods=['POST'])
+@require_auth
+@require_admin
+def admin_deploy_project(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    build_id = pipeline.trigger_deploy(project.id)
+    if build_id is None:
+        return jsonify({'error': 'A deploy is already in progress'}), 409
+    return jsonify({'success': True, 'build_id': build_id}), 202
+
+
+@app.route('/admin/projects/<project_id>/stop', methods=['POST'])
+@require_auth
+@require_admin
+def admin_stop_project(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    pipeline.stop_container(project.id)
+    return jsonify({'success': True})
+
+
+@app.route('/admin/projects/<project_id>/restart', methods=['POST'])
+@require_auth
+@require_admin
+def admin_restart_project(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    pipeline.restart_container(project.id)
+    return jsonify({'success': True})
+
+
+@app.route('/admin/projects/<project_id>', methods=['DELETE'])
+@require_auth
+@require_admin
+def admin_delete_project(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    pipeline.stop_container(project.id)
+    db.session.delete(project)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/admin/teams/<team_id>', methods=['DELETE'])
+@require_auth
+@require_admin
+def admin_delete_team(team_id):
+    team = Team.query.get(team_id)
+    if not team:
+        return jsonify({'error': 'Team not found'}), 404
+    for p in team.projects:
+        p.team_id = None
+    db.session.flush()
+    db.session.delete(team)
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 if __name__ == '__main__':

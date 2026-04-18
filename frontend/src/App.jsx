@@ -9,6 +9,7 @@ import OAuthCallback from './pages/OAuthCallback';
 import Profile from './pages/Profile';
 import Teams from './pages/Teams';
 import TeamDetails from './pages/TeamDetails';
+import Admin from './pages/Admin';
 import { getAuthToken, fetchMe, logout } from './api';
 import { ToastProvider } from './toast';
 import './index.css';
@@ -142,7 +143,7 @@ export default function App() {
             element={
               <Protected user={user}>
                 <Shell user={user}>
-                  <Teams />
+                  <Teams user={user} />
                 </Shell>
               </Protected>
             }
@@ -153,6 +154,16 @@ export default function App() {
               <Protected user={user}>
                 <Shell user={user}>
                   <TeamDetails user={user} />
+                </Shell>
+              </Protected>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <Protected user={user}>
+                <Shell user={user}>
+                  <Admin user={user} />
                 </Shell>
               </Protected>
             }

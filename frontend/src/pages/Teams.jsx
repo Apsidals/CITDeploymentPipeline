@@ -73,7 +73,7 @@ function NewTeamModal({ open, onClose, onCreated }) {
   );
 }
 
-export default function Teams() {
+export default function Teams({ user }) {
   const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -99,9 +99,11 @@ export default function Teams() {
           <h1 style={{ marginTop: 6 }}>Teams</h1>
           <p className="sub">Collaborate on projects with your classmates.</p>
         </div>
-        <button className="btn primary" onClick={() => setShowModal(true)}>
-          <Plus size={14} /> New team
-        </button>
+        {user?.is_admin && (
+          <button className="btn primary" onClick={() => setShowModal(true)}>
+            <Plus size={14} /> New team
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -117,10 +119,12 @@ export default function Teams() {
         <div className="empty">
           <Users size={32} />
           <h3>No teams yet</h3>
-          <p>Create a team to share projects and collaborate with others.</p>
-          <button className="btn primary" onClick={() => setShowModal(true)}>
-            <Plus size={14} /> New team
-          </button>
+          <p>{user?.is_admin ? 'Create a team to share projects and collaborate with others.' : 'Ask an admin to add you to a team.'}</p>
+          {user?.is_admin && (
+            <button className="btn primary" onClick={() => setShowModal(true)}>
+              <Plus size={14} /> New team
+            </button>
+          )}
         </div>
       ) : (
         <div className="projects">
@@ -141,14 +145,16 @@ export default function Teams() {
         </div>
       )}
 
-      <NewTeamModal
-        open={showModal}
-        onClose={() => setShowModal(false)}
-        onCreated={(team) => {
-          setTeams((prev) => [team, ...prev]);
-          setShowModal(false);
-        }}
-      />
+      {user?.is_admin && (
+        <NewTeamModal
+          open={showModal}
+          onClose={() => setShowModal(false)}
+          onCreated={(team) => {
+            setTeams((prev) => [team, ...prev]);
+            setShowModal(false);
+          }}
+        />
+      )}
     </>
   );
 }

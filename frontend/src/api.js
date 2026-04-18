@@ -170,3 +170,18 @@ export const searchUsers = async (q) => {
     const res = await api.get('/users/search', { params: { q } });
     return res.data;
 };
+
+// Admin API
+export const getAdminStats = async () => { const r = await api.get('/admin/stats'); return r.data; };
+export const getAdminProjects = async () => { const r = await api.get('/admin/projects'); return r.data; };
+export const getAdminUsers = async () => { const r = await api.get('/admin/users'); return r.data; };
+export const getAdminTeams = async () => { const r = await api.get('/admin/teams'); return r.data; };
+export const getAdminResources = async () => { const r = await api.get('/admin/resources'); return r.data; };
+export const adminUpdateUser = async (id, data) => { const r = await api.patch(`/admin/users/${id}`, data); return r.data; };
+export const adminSetPassword = async (id, password) => { const r = await api.patch(`/admin/users/${id}/password`, { password }); return r.data; };
+export const adminDeleteUser = async (id) => { const r = await api.delete(`/admin/users/${id}`); return r.data; };
+export const adminDeployProject = async (id) => { const r = await api.post(`/admin/projects/${id}/deploy`); return r.data; };
+export const adminStopProject = async (id) => { const r = await api.post(`/admin/projects/${id}/stop`); return r.data; };
+export const adminRestartProject = async (id) => { const r = await api.post(`/admin/projects/${id}/restart`); return r.data; };
+export const adminDeleteProject = async (id) => { const r = await api.delete(`/admin/projects/${id}`); return r.data; };
+export const adminDeleteTeam = async (id) => { const r = await api.delete(`/admin/teams/${id}`); return r.data; };
