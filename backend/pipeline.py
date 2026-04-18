@@ -12,9 +12,13 @@ BUILD_TIMEOUT = 300  # 5 minutes
 
 COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
 
+PORT_START = 5000
+PORT_END   = 5999
+
 _deploy_locks: dict = {}
 _locks_mutex = threading.Lock()
 _active_procs: dict = {}
+_port_lock   = threading.Lock()
 
 
 def _get_lock(project_id: str) -> threading.Lock:
@@ -117,6 +121,128 @@ def _parse_compose(compose_path):
                         pass
 
     return services, ports
+
+
+def _get_allocated_docker_ports():
+    """Return the set of host port numbers currently bound by any running Docker container."""
+    result = subprocess.run(
+        ["docker", "ps", "--format", "{{.Ports}}"],
+        capture_output=True, text=True
+    )
+    allocated = set()
+    for line in result.stdout.splitlines():
+        for segment in line.split(','):
+            segment = segment.strip()
+            if '->' in segment:
+                host_part = segment.split('->')[0]
+                port_str = host_part.rsplit(':', 1)[-1]
+                try:
+                    allocated.add(int(port_str))
+                except ValueError:
+                    pass
+    return allocated
+
+
+def _assign_and_reserve_compose_ports(project_id, explicit_ports):
+    """
+    Atomically reserve one host port per explicit port mapping, then persist
+    the reservation to the DB before returning.  All N ports are selected and
+    committed inside a single _port_lock acquisition so concurrent deploys
+    cannot steal ports from each other between grabs.
+
+    Returns a list of remapped {service, host_port, container_port} dicts.
+    If explicit_ports is empty, returns [] immediately without locking.
+    """
+    if not explicit_ports:
+        return []
+
+    app = get_app()
+    with _port_lock:
+        with app.app_context():
+            # Collect every port already registered in the DB.
+            used_db = set()
+            for row in db.session.query(Project.port, Project.id, Project.compose_ports).all():
+                used_db.add(row[0])
+                if row[1] != project_id:
+                    try:
+                        for p in json.loads(row[2] or '[]'):
+                            used_db.add(p['host_port'])
+                    except Exception:
+                        pass
+
+            used_docker = _get_allocated_docker_ports()
+            used = used_db | used_docker
+
+            # Allocate all N ports in one pass — no re-entering the lock.
+            remapped = []
+            candidate = PORT_START
+            for ep in explicit_ports:
+                while candidate in used or candidate in {r['host_port'] for r in remapped}:
+                    candidate += 1
+                    if candidate > PORT_END:
+                        raise Exception(
+                            f"Port registry exhausted — no free ports in {PORT_START}–{PORT_END}"
+                        )
+                remapped.append({
+                    'service': ep['service'],
+                    'host_port': candidate,
+                    'container_port': ep['container_port'],
+                })
+                candidate += 1
+
+            # Persist the reservation immediately so the next concurrent deploy
+            # sees these ports as taken before we even start docker compose up.
+            project = db.session.get(Project, project_id)
+            project.compose_ports = json.dumps(remapped)
+            db.session.commit()
+
+    return remapped
+
+
+def _patch_compose_ports(project_dir, compose_file, remapped_ports):
+    """
+    Directly rewrite port bindings in the cloned compose file so Docker sees
+    the remapped host ports.  Override files can't do this because Docker Compose
+    merges list fields instead of replacing them, which would leave both the
+    original and remapped port active simultaneously.
+    """
+    import yaml
+    compose_path = os.path.join(project_dir, compose_file)
+    with open(compose_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
+
+    # (service, container_port) -> new host_port
+    remap = {(rp['service'], rp['container_port']): rp['host_port'] for rp in remapped_ports}
+
+    for svc, cfg in (data.get('services') or {}).items():
+        if not cfg or not cfg.get('ports'):
+            continue
+        new_ports = []
+        for entry in cfg['ports']:
+            if isinstance(entry, dict):
+                target = entry.get('target')
+                if target is not None:
+                    new_host = remap.get((svc, int(target)))
+                    if new_host is not None:
+                        entry = dict(entry)
+                        entry['published'] = new_host
+            else:
+                s = str(entry).strip()
+                if ':' in s:
+                    parts = s.split(':')
+                    try:
+                        container_port = int(parts[-1].split('/')[0])
+                        new_host = remap.get((svc, container_port))
+                        if new_host is not None:
+                            parts[-2] = str(new_host)
+                            entry = ':'.join(parts)
+                    except (ValueError, IndexError):
+                        pass
+            new_ports.append(entry)
+        cfg['ports'] = new_ports
+
+    with open(compose_path, 'w', encoding='utf-8') as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
 
 def _write_compose_override(project_dir, services):
@@ -304,7 +430,25 @@ def deploy_project_task(project_id, build_id, lock: threading.Lock):
                 services, explicit_ports = _parse_compose(os.path.join(project_dir, compose_file))
                 append_log(build_id, f"[✓] Services: {', '.join(services)}\n")
 
-                # Inject resource limits via override file
+                # Atomically reserve host ports for every explicit binding.
+                remapped_ports = _assign_and_reserve_compose_ports(project_id, explicit_ports)
+
+                if remapped_ports:
+                    for rp in remapped_ports:
+                        original = next(
+                            (ep['host_port'] for ep in explicit_ports if ep['service'] == rp['service'] and ep['container_port'] == rp['container_port']),
+                            rp['container_port']
+                        )
+                        if original != rp['host_port']:
+                            append_log(build_id, f"[port] {rp['service']}: {original}→{rp['host_port']} (remapped to avoid conflict)\n")
+                        else:
+                            append_log(build_id, f"[port] {rp['service']}: :{rp['host_port']}\n")
+                    # Patch ports directly in the cloned compose file — override files
+                    # merge lists instead of replacing them, which would leave both the
+                    # original and remapped port active and cause a bind conflict.
+                    _patch_compose_ports(project_dir, compose_file, remapped_ports)
+
+                # Inject resource limits via override file (scalar values override correctly).
                 _write_compose_override(project_dir, services)
                 append_log(build_id, f"[✓] Resource limits applied: 512 MB / 0.5 CPU per service\n")
 
@@ -338,8 +482,8 @@ def deploy_project_task(project_id, build_id, lock: threading.Lock):
                         "Check the output above for crash details."
                     )
 
-                # Port discovery
-                final_ports = _discover_ports(project_name, project_dir, services, explicit_ports)
+                # Port discovery — use remapped ports as the authoritative base.
+                final_ports = _discover_ports(project_name, project_dir, services, remapped_ports)
 
                 # Update project record
                 project.is_compose = True

@@ -419,22 +419,29 @@ def create_project():
     else:
         env_vars_str = '{}'
 
-    # Assign external port (auto-increment from 5000)
-    max_port_proj = Project.query.order_by(Project.port.desc()).first()
-    port = max_port_proj.port + 1 if max_port_proj and max_port_proj.port >= 5000 else 5000
+    # Atomically assign + commit a unique host port so concurrent project
+    # creation requests cannot both read the same max and collide.
+    with pipeline._port_lock:
+        used_ports = {row[0] for row in db.session.query(Project.port).all()}
+        p = pipeline.PORT_START
+        while p in used_ports:
+            p += 1
+            if p > pipeline.PORT_END:
+                return jsonify({'error': 'No free ports available — contact the administrator'}), 503
+        port = p
 
-    project = Project(
-        user_id=g.user.id,
-        team_id=team_id,
-        name=name,
-        repo_url=repo_url,
-        port=port,
-        dockerfile_path=dockerfile_path,
-        internal_port=internal_port,
-        env_vars=env_vars_str,
-    )
-    db.session.add(project)
-    db.session.commit()
+        project = Project(
+            user_id=g.user.id,
+            team_id=team_id,
+            name=name,
+            repo_url=repo_url,
+            port=port,
+            dockerfile_path=dockerfile_path,
+            internal_port=internal_port,
+            env_vars=env_vars_str,
+        )
+        db.session.add(project)
+        db.session.commit()
 
     pipeline.trigger_deploy(project.id)
 
