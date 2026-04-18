@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { loginWithGithub, setAuthToken } from '../api';
+import { loginWithGithub, connectGithub, setAuthToken, getAuthToken, fetchMe } from '../api';
 
 export default function OAuthCallback({ setUser }) {
   const navigate = useNavigate();
@@ -10,19 +10,35 @@ export default function OAuthCallback({ setUser }) {
     const params = new URLSearchParams(location.search);
     const code = params.get('code');
 
-    if (code) {
+    if (!code) {
+      navigate('/login');
+      return;
+    }
+
+    const existingToken = getAuthToken();
+
+    if (existingToken) {
+      // Already logged in — this is a GitHub connect request from Profile
+      connectGithub(code)
+        .then((user) => {
+          if (setUser) setUser(user);
+          navigate('/profile');
+        })
+        .catch((err) => {
+          console.error('GitHub connect failed', err);
+          navigate('/profile?error=github_conflict');
+        });
+    } else {
       loginWithGithub(code)
         .then((data) => {
           setAuthToken(data.token);
-          setUser(data.user);
+          if (setUser) setUser(data.user);
           navigate('/');
         })
         .catch((err) => {
           console.error('OAuth failed', err);
           navigate('/login');
         });
-    } else {
-      navigate('/login');
     }
   }, [location, navigate, setUser]);
 

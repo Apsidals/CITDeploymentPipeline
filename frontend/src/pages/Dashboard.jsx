@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Rocket, X, Box, Activity, CircleOff, Trash2
 } from 'lucide-react';
-import { getProjects, createProject } from '../api';
+import { getProjects, createProject, getTeams } from '../api';
 import { useToast } from '../toast';
 
 const GithubIcon = ({ size = 13 }) => (
@@ -50,7 +50,11 @@ function ProjectCard({ p }) {
         <span className="truncate">{shortRepo(p.repo_url)}</span>
       </div>
       <div className="foot">
-        <span className="port">:{p.port}</span>
+        {p.team_name ? (
+          <span className="team-chip">{p.team_name}</span>
+        ) : (
+          <span className="port">:{p.port}</span>
+        )}
         <span>{relTime(p.created_at)}</span>
       </div>
     </Link>
@@ -91,17 +95,19 @@ function EnvVarsEditor({ rows, onChange }) {
   );
 }
 
-function NewProjectModal({ open, onClose, onCreated }) {
+function NewProjectModal({ open, onClose, onCreated, teams }) {
   const [name, setName] = useState('');
   const [repo, setRepo] = useState('');
   const [dockerfilePath, setDockerfilePath] = useState('');
   const [internalPort, setInternalPort] = useState('');
   const [envRows, setEnvRows] = useState([]);
+  const [teamId, setTeamId] = useState('');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
     if (!open) return;
+    setTeamId('');
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -113,6 +119,7 @@ function NewProjectModal({ open, onClose, onCreated }) {
     setDockerfilePath('');
     setInternalPort('');
     setEnvRows([]);
+    setTeamId('');
     onClose();
   };
 
@@ -125,15 +132,17 @@ function NewProjectModal({ open, onClose, onCreated }) {
       if (key.trim()) envVarsObj[key.trim()] = value;
     });
     try {
-      const proj = await createProject(
-        name.trim(),
-        repo.trim(),
-        dockerfilePath.trim() || 'Dockerfile',
-        internalPort ? parseInt(internalPort, 10) : null,
-        envVarsObj
-      );
+      const payload = {
+        name: name.trim(),
+        repo_url: repo.trim(),
+        dockerfile_path: dockerfilePath.trim() || 'Dockerfile',
+        internal_port: internalPort ? parseInt(internalPort, 10) : null,
+        env_vars: envVarsObj,
+        team_id: teamId || null,
+      };
+      const res = await import('../api').then(m => m.api.post('/projects', payload));
       toast('Deploy started', 'ok');
-      onCreated(proj);
+      onCreated(res.data);
     } catch (err) {
       console.error(err);
       toast('Failed to create project', 'err');
@@ -204,6 +213,21 @@ function NewProjectModal({ open, onClose, onCreated }) {
             <label>Environment variables <span className="dim">(optional)</span></label>
             <EnvVarsEditor rows={envRows} onChange={setEnvRows} />
           </div>
+          {teams && teams.length > 0 && (
+            <div className="field">
+              <label>Team <span className="dim">(optional)</span></label>
+              <select
+                className="input"
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value)}
+              >
+                <option value="">Personal</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         <div className="actions">
           <button type="button" className="btn ghost" onClick={handleClose} disabled={busy}>
@@ -232,16 +256,18 @@ function SkeletonCards() {
   );
 }
 
-export default function Dashboard() {
+export default function Dashboard({ user: appUser }) {
   const [projects, setProjects] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const navigate = useNavigate();
 
   const load = async () => {
     try {
-      const data = await getProjects();
-      setProjects(data);
+      const [projData, teamData] = await Promise.all([getProjects(), getTeams()]);
+      setProjects(projData);
+      setTeams(teamData);
     } catch (e) {
       console.error(e);
     } finally {
@@ -252,7 +278,6 @@ export default function Dashboard() {
   useEffect(() => {
     load();
     const interval = setInterval(() => {
-      // Only refetch if any project is actively transitioning
       setProjects((curr) => {
         if (curr.some((p) => p.status === 'building')) {
           getProjects().then(setProjects).catch(() => {});
@@ -269,8 +294,8 @@ export default function Dashboard() {
     const stopped = projects.filter(
       (p) => p.status !== 'running' && p.status !== 'building'
     ).length;
-    return { total: projects.length, running, building, stopped };
-  }, [projects]);
+    return { total: projects.length, running, building, stopped, teams: teams.length };
+  }, [projects, teams]);
 
   return (
     <>
@@ -304,6 +329,12 @@ export default function Dashboard() {
             <CircleOff size={18} color="var(--fg-2)" /> {stats.stopped}
           </span>
         </div>
+        <div className="stat">
+          <span className="label">Teams</span>
+          <span className="value">
+            <Box size={18} color="var(--fg-2)" /> {stats.teams}
+          </span>
+        </div>
       </div>
 
       {loading ? (
@@ -329,6 +360,7 @@ export default function Dashboard() {
         open={showModal}
         onClose={() => setShowModal(false)}
         onCreated={(proj) => navigate(`/projects/${proj.id}`)}
+        teams={teams}
       />
     </>
   );

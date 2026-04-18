@@ -1,27 +1,35 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { loginWithEmail, setAuthToken } from '../api';
+import { registerUser, setAuthToken } from '../api';
 
-export default function Login({ setUser }) {
+export default function Register({ setUser }) {
   const navigate = useNavigate();
 
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setPasswordError('');
+
+    if (password.length < 8) {
+      setPasswordError('Password must be at least 8 characters');
+      return;
+    }
+
     setLoading(true);
     try {
-      const data = await loginWithEmail(email, password);
+      const data = await registerUser(name, email, password);
       setAuthToken(data.token);
       if (setUser) setUser(data.user);
       navigate('/');
     } catch (err) {
-      const body = err?.response?.data;
-      setError(body?.error || 'Login failed');
+      setError(err?.response?.data?.error || 'Registration failed');
     } finally {
       setLoading(false);
     }
@@ -31,10 +39,22 @@ export default function Login({ setUser }) {
     <div className="auth-wrap">
       <div className="auth-card">
         <div className="brand-mark">CD</div>
-        <h1>Welcome back</h1>
-        <p>Sign in to your CIT Deploy account.</p>
+        <h1>Create account</h1>
+        <p>Join CIT Deploy to deploy and manage your projects.</p>
 
         <form onSubmit={handleSubmit} className="col" style={{ marginTop: 24, textAlign: 'left' }}>
+          <div className="field">
+            <label htmlFor="name">Name</label>
+            <input
+              id="name"
+              className="input"
+              type="text"
+              autoComplete="name"
+              placeholder="Your full name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
           <div className="field">
             <label htmlFor="email">Email</label>
             <input
@@ -54,23 +74,24 @@ export default function Login({ setUser }) {
               id="password"
               className="input"
               type="password"
-              autoComplete="current-password"
-              placeholder="••••••••"
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setPasswordError(''); }}
               required
             />
+            {passwordError && <p className="field-error">{passwordError}</p>}
           </div>
           {error && <p className="field-error">{error}</p>}
           <button className="btn primary block" type="submit" disabled={loading} style={{ marginTop: 4 }}>
-            {loading ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Signing in…</> : 'Sign in'}
+            {loading ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Creating account…</> : 'Create account'}
           </button>
         </form>
 
         <div className="auth-footer">
-          Don't have an account?{' '}
-          <Link to="/register" style={{ color: 'var(--fg-1)', textDecoration: 'underline' }}>
-            Register
+          Already have an account?{' '}
+          <Link to="/login" style={{ color: 'var(--fg-1)', textDecoration: 'underline' }}>
+            Sign in
           </Link>
         </div>
       </div>

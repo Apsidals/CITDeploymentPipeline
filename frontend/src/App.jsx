@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link, NavLink } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import ProjectDetails from './pages/ProjectDetails';
 import OAuthCallback from './pages/OAuthCallback';
+import Profile from './pages/Profile';
+import Teams from './pages/Teams';
+import TeamDetails from './pages/TeamDetails';
 import { getAuthToken, fetchMe, logout } from './api';
 import { ToastProvider } from './toast';
 import './index.css';
@@ -21,19 +25,34 @@ function Topbar({ user }) {
         <span className="brand-divider" />
         <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>Phase 1</span>
       </Link>
+      {user && (
+        <nav className="topbar-nav">
+          <NavLink to="/" end className={({ isActive }) => `topbar-nav-link${isActive ? ' active' : ''}`}>
+            Projects
+          </NavLink>
+          <NavLink to="/teams" className={({ isActive }) => `topbar-nav-link${isActive ? ' active' : ''}`}>
+            Teams
+          </NavLink>
+          {user?.is_admin && (
+            <NavLink to="/admin" className={({ isActive }) => `topbar-nav-link${isActive ? ' active' : ''}`}>
+              Admin
+            </NavLink>
+          )}
+        </nav>
+      )}
       <div className="topbar-right">
         {user && (
           <>
-            <div className="user-chip">
+            <Link to="/profile" className="user-chip">
               {user.avatar_url ? (
                 <img src={user.avatar_url} alt="" />
               ) : (
                 <span className="brand-mark" style={{ width: 22, height: 22 }}>
-                  {(user.username || '?').slice(0, 1).toUpperCase()}
+                  {((user.name || user.username) || '?').slice(0, 1).toUpperCase()}
                 </span>
               )}
-              <span className="hidden-sm">{user.username}</span>
-            </div>
+              <span className="hidden-sm">{user.name || user.username}</span>
+            </Link>
             <button className="btn ghost" onClick={() => logout()} title="Sign out">
               <LogOut size={14} />
               <span className="hidden-sm">Sign out</span>
@@ -84,7 +103,8 @@ export default function App() {
     <ToastProvider>
       <Router>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<Login setUser={setUser} />} />
+          <Route path="/register" element={<Register setUser={setUser} />} />
           <Route path="/auth/github" element={<OAuthCallback setUser={setUser} />} />
 
           <Route
@@ -102,7 +122,37 @@ export default function App() {
             element={
               <Protected user={user}>
                 <Shell user={user}>
-                  <ProjectDetails />
+                  <ProjectDetails user={user} />
+                </Shell>
+              </Protected>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <Protected user={user}>
+                <Shell user={user}>
+                  <Profile user={user} setUser={setUser} />
+                </Shell>
+              </Protected>
+            }
+          />
+          <Route
+            path="/teams"
+            element={
+              <Protected user={user}>
+                <Shell user={user}>
+                  <Teams />
+                </Shell>
+              </Protected>
+            }
+          />
+          <Route
+            path="/teams/:id"
+            element={
+              <Protected user={user}>
+                <Shell user={user}>
+                  <TeamDetails user={user} />
                 </Shell>
               </Protected>
             }

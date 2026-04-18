@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Play, Square, RotateCw, Trash2, ExternalLink, ArrowLeft, Copy,
   Terminal as TerminalIcon, History, Check, Download, Trash, Pencil, Plus, Settings2
@@ -233,7 +233,7 @@ function BuildHistory({ builds }) {
 
 /* -------------------- Page -------------------- */
 
-export default function ProjectDetails() {
+export default function ProjectDetails({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
@@ -485,9 +485,21 @@ export default function ProjectDetails() {
 
   return (
     <div>
-      <span className="crumb" onClick={() => navigate('/')}>
-        <ArrowLeft size={14} /> Projects
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20 }}>
+        <Link to="/" className="crumb" style={{ marginBottom: 0 }}>
+          <ArrowLeft size={14} /> Projects
+        </Link>
+        {project.team_id && (
+          <>
+            <span style={{ color: 'var(--fg-3)', fontSize: 13 }}>/</span>
+            <Link to={`/teams/${project.team_id}`} className="crumb" style={{ marginBottom: 0 }}>
+              {project.team_name}
+            </Link>
+          </>
+        )}
+        <span style={{ color: 'var(--fg-3)', fontSize: 13 }}>/</span>
+        <span style={{ fontSize: 13, color: 'var(--fg-1)', fontWeight: 500 }}>{project.name}</span>
+      </div>
 
       <div className="project-header">
         <div>
@@ -515,9 +527,11 @@ export default function ProjectDetails() {
           <button className="btn" onClick={() => runAction(stopProject, 'Stopped')} disabled={!isRunning || isBuilding}>
             <Square size={14} /> Stop
           </button>
-          <button className="btn danger" onClick={handleDelete} disabled={isBuilding}>
-            <Trash2 size={14} /> Delete
-          </button>
+          {(project.user_id === user?.id || user?.is_admin) && (
+            <button className="btn danger" onClick={handleDelete} disabled={isBuilding}>
+              <Trash2 size={14} /> Delete
+            </button>
+          )}
         </div>
       </div>
 
@@ -585,6 +599,16 @@ export default function ProjectDetails() {
         <div className="meta">
           <span className="k">Created</span>
           <span className="v">{relTime(project.created_at)}</span>
+        </div>
+        <div className="meta">
+          <span className="k">Team</span>
+          <span className="v">
+            {project.team_id ? (
+              <Link to={`/teams/${project.team_id}`} style={{ color: 'var(--fg-1)', textDecoration: 'none' }}>
+                {project.team_name}
+              </Link>
+            ) : 'Personal'}
+          </span>
         </div>
         <div className="meta">
           <span className="k">Dockerfile</span>

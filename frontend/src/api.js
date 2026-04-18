@@ -105,3 +105,68 @@ export const getRuntimeLogsUrl = (projectId) => {
     const token = getAuthToken();
     return `${API_URL}/projects/${projectId}/runtime-logs?token=${token}`;
 }
+
+export const registerUser = async (name, email, password) => {
+    const res = await api.post('/auth/register', { name, email, password });
+    return res.data;
+};
+
+export const loginWithEmail = async (email, password) => {
+    const res = await api.post('/auth/login', { email, password });
+    return res.data;
+};
+
+export const updateMe = async (data) => {
+    const res = await api.patch('/auth/me', data);
+    return res.data;
+};
+
+export const connectGithub = async (code) => {
+    const res = await api.post('/auth/github/connect', { code });
+    return res.data;
+};
+
+export const disconnectGithub = async () => {
+    const res = await api.delete('/auth/github/connect');
+    return res.data;
+};
+
+export const getTeams = async () => {
+    const res = await api.get('/teams');
+    return res.data;
+};
+
+export const createTeam = async (name) => {
+    const res = await api.post('/teams', { name });
+    return res.data;
+};
+
+export const getTeam = async (id) => {
+    const res = await api.get(`/teams/${id}`);
+    return res.data;
+};
+
+export const deleteTeam = async (id) => {
+    const res = await api.delete(`/teams/${id}`);
+    return res.data;
+};
+
+export const getTeamMembers = async (id) => {
+    const res = await api.get(`/teams/${id}/members`);
+    return res.data;
+};
+
+export const addTeamMember = async (teamId, userId, role = 'member') => {
+    const res = await api.post(`/teams/${teamId}/members`, { user_id: userId, role });
+    return res.data;
+};
+
+export const removeTeamMember = async (teamId, userId) => {
+    const res = await api.delete(`/teams/${teamId}/members/${userId}`);
+    return res.data;
+};
+
+export const searchUsers = async (q) => {
+    const res = await api.get('/users/search', { params: { q } });
+    return res.data;
+};
