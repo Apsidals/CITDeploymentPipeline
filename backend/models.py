@@ -53,6 +53,8 @@ class Project(db.Model):
     dockerfile_path = db.Column(db.String(256), nullable=False, default='Dockerfile')
     internal_port = db.Column(db.Integer, default=5000)
     env_vars = db.Column(db.Text, default='{}')
+    is_compose = db.Column(db.Boolean, default=False)
+    compose_ports = db.Column(db.Text, default='[]')  # JSON list of {service, host_port, container_port}
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     builds = db.relationship('Build', backref='project', lazy=True, cascade='all, delete-orphan')

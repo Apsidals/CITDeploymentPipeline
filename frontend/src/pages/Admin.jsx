@@ -160,7 +160,7 @@ function Overview({ stats, resources }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-2)', borderBottom: '1px solid var(--border)' }}>
-                  {['Project', 'CPU %', '', 'Memory', ''].map((h, i) => (
+                  {['Project', 'Service', 'CPU %', '', 'Memory', ''].map((h, i) => (
                     <th key={i} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                       {h}
                     </th>
@@ -175,6 +175,11 @@ function Overview({ stats, resources }) {
                         ? <Link to={`/projects/${c.project_id}`} style={{ color: 'var(--fg-0)', textDecoration: 'none' }}>{c.project_name}</Link>
                         : <span style={{ color: 'var(--fg-2)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{c.container_name}</span>
                       }
+                    </td>
+                    <td style={{ padding: '11px 16px', fontSize: 12 }}>
+                      {c.service_name
+                        ? <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-2)' }}>{c.service_name}</span>
+                        : <span style={{ color: 'var(--fg-3)' }}>—</span>}
                     </td>
                     <td style={{ padding: '11px 16px', fontFamily: 'var(--font-mono)', fontSize: 12, color: c.cpu_pct > 85 ? 'var(--err)' : c.cpu_pct > 60 ? 'var(--warn)' : 'var(--ok)', whiteSpace: 'nowrap' }}>
                       {c.cpu_pct}%
@@ -212,7 +217,12 @@ function Deployments({ projects, resources, onRefresh }) {
 
   const resourceMap = useMemo(() => {
     const m = {};
-    (resources.containers || []).forEach((c) => { if (c.project_id) m[c.project_id] = c; });
+    (resources.containers || []).forEach((c) => {
+      if (c.project_id) {
+        if (!m[c.project_id]) m[c.project_id] = [];
+        m[c.project_id].push(c);
+      }
+    });
     return m;
   }, [resources]);
 
@@ -317,10 +327,11 @@ function Deployments({ projects, resources, onRefresh }) {
                 <span className={`status ${p.status}`} style={{ padding: 0, background: 'transparent', border: 0 }}>
                   <span className="dot" />
                 </span>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
                   <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {p.name}
                   </div>
+                  {p.is_compose && <span className="compose-chip">compose</span>}
                 </div>
                 <span style={{ fontSize: 12, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.owner_username || '—'}
@@ -365,16 +376,48 @@ function Deployments({ projects, resources, onRefresh }) {
                   </div>
 
                   {/* Resource bars */}
-                  {res && (
-                    <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', marginBottom: 6 }}>CPU</div>
-                        <ResourceBar pct={res.cpu_pct} label={`${res.cpu_pct}%`} />
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', marginBottom: 6 }}>Memory</div>
-                        <ResourceBar pct={res.mem_pct} label={`${res.mem_used_mb} MB / ${res.mem_limit_mb} MB`} />
-                      </div>
+                  {res && res.length > 0 && (
+                    <div>
+                      {res.length === 1 ? (
+                        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+                          <div>
+                            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', marginBottom: 6 }}>CPU</div>
+                            <ResourceBar pct={res[0].cpu_pct} label={`${res[0].cpu_pct}%`} />
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', marginBottom: 6 }}>Memory</div>
+                            <ResourceBar pct={res[0].mem_pct} label={`${res[0].mem_used_mb} MB / ${res[0].mem_limit_mb} MB`} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--fg-3)', marginBottom: 8 }}>
+                            Per-service resources ({res.length} services)
+                          </div>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ color: 'var(--fg-3)', fontSize: 11 }}>
+                                <th style={{ textAlign: 'left', padding: '4px 8px 6px 0', fontWeight: 600 }}>Service</th>
+                                <th style={{ textAlign: 'left', padding: '4px 8px 6px', fontWeight: 600 }}>CPU</th>
+                                <th style={{ padding: '4px 8px 6px', minWidth: 110 }} />
+                                <th style={{ textAlign: 'left', padding: '4px 8px 6px', fontWeight: 600 }}>Memory</th>
+                                <th style={{ padding: '4px 8px 6px', minWidth: 110 }} />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {res.map((svc) => (
+                                <tr key={svc.container_name}>
+                                  <td style={{ padding: '5px 8px 5px 0', fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>{svc.service_name || svc.container_name}</td>
+                                  <td style={{ padding: '5px 8px', color: svc.cpu_pct > 85 ? 'var(--err)' : svc.cpu_pct > 60 ? 'var(--warn)' : 'var(--ok)', fontFamily: 'var(--font-mono)' }}>{svc.cpu_pct}%</td>
+                                  <td style={{ padding: '5px 8px' }}><ResourceBar pct={svc.cpu_pct} /></td>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{svc.mem_used_mb} / {svc.mem_limit_mb} MB</td>
+                                  <td style={{ padding: '5px 8px' }}><ResourceBar pct={svc.mem_pct} /></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -536,60 +536,95 @@ export default function ProjectDetails({ user }) {
       </div>
 
       <div className="meta-strip">
-        <div className="meta">
-          <span className="k">URL</span>
-          <a
-            className="v"
-            href={`http://localhost:${project.port}`}
-            target="_blank"
-            rel="noreferrer"
-            title="Open deployment"
-          >
-            localhost:{project.port}
-            <ExternalLink size={12} />
-          </a>
-        </div>
-        <div className="meta">
-          <span className="k">Ext. port</span>
-          <span className="v mono">{project.port}</span>
-        </div>
-        <div className="meta">
-          <span className="k">Container port</span>
-          <span className="v mono" style={{ gap: 6 }}>
-            {editingInternalPort ? (
-              <input
-                className="input mono"
-                style={{ padding: '2px 8px', fontSize: 12, height: 26, width: 70 }}
-                type="number"
-                min="1"
-                max="65535"
-                value={internalPortInput}
-                onChange={(e) => setInternalPortInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') saveInternalPort();
-                  if (e.key === 'Escape') setEditingInternalPort(false);
-                }}
-                onBlur={saveInternalPort}
-                autoFocus
-              />
-            ) : (
-              <>
-                <span>{project.internal_port || 5000}</span>
-                <button
-                  className="icon-btn"
-                  style={{ width: 22, height: 22 }}
-                  onClick={() => {
-                    setInternalPortInput(String(project.internal_port || 5000));
-                    setEditingInternalPort(true);
+        {project.is_compose ? (
+          <>
+            <div className="meta">
+              <span className="k">Type</span>
+              <span className="v"><span className="compose-chip">Docker Compose</span></span>
+            </div>
+            <div className="meta">
+              <span className="k">Services / ports</span>
+              <span className="v mono" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                {(() => {
+                  try {
+                    const ports = JSON.parse(project.compose_ports || '[]');
+                    if (ports.length === 0) return <span style={{ color: 'var(--fg-3)' }}>auto-assigned</span>;
+                    return ports.map((entry, i) => (
+                      <a
+                        key={i}
+                        href={`http://localhost:${entry.host_port}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        {entry.service}: :{entry.host_port} <ExternalLink size={11} />
+                      </a>
+                    ));
+                  } catch { return <span style={{ color: 'var(--fg-3)' }}>—</span>; }
+                })()}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="meta">
+              <span className="k">URL</span>
+              <a
+                className="v"
+                href={`http://localhost:${project.port}`}
+                target="_blank"
+                rel="noreferrer"
+                title="Open deployment"
+              >
+                localhost:{project.port}
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <div className="meta">
+              <span className="k">Ext. port</span>
+              <span className="v mono">{project.port}</span>
+            </div>
+          </>
+        )}
+        {!project.is_compose && (
+          <div className="meta">
+            <span className="k">Container port</span>
+            <span className="v mono" style={{ gap: 6 }}>
+              {editingInternalPort ? (
+                <input
+                  className="input mono"
+                  style={{ padding: '2px 8px', fontSize: 12, height: 26, width: 70 }}
+                  type="number"
+                  min="1"
+                  max="65535"
+                  value={internalPortInput}
+                  onChange={(e) => setInternalPortInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveInternalPort();
+                    if (e.key === 'Escape') setEditingInternalPort(false);
                   }}
-                  title="Edit container port"
-                >
-                  <Pencil size={11} />
-                </button>
-              </>
-            )}
-          </span>
-        </div>
+                  onBlur={saveInternalPort}
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <span>{project.internal_port || 5000}</span>
+                  <button
+                    className="icon-btn"
+                    style={{ width: 22, height: 22 }}
+                    onClick={() => {
+                      setInternalPortInput(String(project.internal_port || 5000));
+                      setEditingInternalPort(true);
+                    }}
+                    title="Edit container port"
+                  >
+                    <Pencil size={11} />
+                  </button>
+                </>
+              )}
+            </span>
+          </div>
+        )}
         <div className="meta">
           <span className="k">Container</span>
           <span className="v mono">

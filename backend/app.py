@@ -66,6 +66,16 @@ with app.app_context():
             conn.execute(text("ALTER TABLE projects ADD COLUMN team_id VARCHAR(36)"))
             conn.commit()
         print("[migrate] Added team_id column to projects table")
+    if 'is_compose' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN is_compose BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+        print("[migrate] Added is_compose column to projects table")
+    if 'compose_ports' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN compose_ports TEXT NOT NULL DEFAULT '[]'"))
+            conn.commit()
+        print("[migrate] Added compose_ports column to projects table")
     existing_user_cols = [c['name'] for c in inspector.get_columns('users')]
     for col, ddl in [
         ('email', 'VARCHAR(254)'),
@@ -369,6 +379,8 @@ def get_projects():
         'repo_url': p.repo_url,
         'port': p.port,
         'status': p.status,
+        'is_compose': bool(p.is_compose),
+        'compose_ports': p.compose_ports or '[]',
         'created_at': p.created_at.isoformat(),
         'user_id': p.user_id,
         'team_id': p.team_id,
@@ -450,6 +462,8 @@ def get_project(project):
         'dockerfile_path': project.dockerfile_path or 'Dockerfile',
         'internal_port': project.internal_port or 5000,
         'env_vars': project.env_vars or '{}',
+        'is_compose': bool(project.is_compose),
+        'compose_ports': project.compose_ports or '[]',
         'created_at': project.created_at.isoformat(),
         'user_id': project.user_id,
         'team_id': project.team_id,
@@ -623,28 +637,57 @@ def stream_runtime_logs(project_id):
         return jsonify({'error': 'Forbidden'}), 403
 
     project_name = f"cit-deploy-{project.id[:8]}"
+    is_compose = bool(project.is_compose)
 
     def generate():
-        inspect_result = subprocess.run(
-            ["docker", "inspect", "--format", "{{.State.Running}}", project_name],
-            capture_output=True, text=True
-        )
-        if inspect_result.returncode != 0 or inspect_result.stdout.strip() != 'true':
-            yield "data: Container is not currently running.\n\n"
-            yield "event: done\ndata: \n\n"
-            return
+        if is_compose:
+            import os as _os
+            from pipeline import DEPLOYMENTS_DIR
+            project_dir = _os.path.join(DEPLOYMENTS_DIR, project_name)
+            # Check at least one compose service is running
+            ps_result = subprocess.run(
+                ["docker", "compose", "-p", project_name, "ps", "--services", "--filter", "status=running"],
+                capture_output=True, text=True, cwd=project_dir
+            )
+            if ps_result.returncode != 0 or not ps_result.stdout.strip():
+                yield "data: No compose services are currently running.\n\n"
+                yield "event: done\ndata: \n\n"
+                return
 
-        yield "data: Connected to runtime logs\n\n"
+            yield "data: Connected to compose runtime logs\n\n"
 
-        process = subprocess.Popen(
-            ["docker", "logs", "--follow", "--tail", "100", project_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding='utf-8',
-            errors='replace'
-        )
+            process = subprocess.Popen(
+                ["docker", "compose", "-p", project_name, "logs", "--follow", "--tail", "100"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding='utf-8',
+                errors='replace',
+                cwd=project_dir,
+            )
+        else:
+            inspect_result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", project_name],
+                capture_output=True, text=True
+            )
+            if inspect_result.returncode != 0 or inspect_result.stdout.strip() != 'true':
+                yield "data: Container is not currently running.\n\n"
+                yield "event: done\ndata: \n\n"
+                return
+
+            yield "data: Connected to runtime logs\n\n"
+
+            process = subprocess.Popen(
+                ["docker", "logs", "--follow", "--tail", "100", project_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding='utf-8',
+                errors='replace',
+            )
+
         try:
             for line in process.stdout:
                 line = line.rstrip('\n')
@@ -870,6 +913,8 @@ def admin_projects():
             'dockerfile_path': p.dockerfile_path or 'Dockerfile',
             'internal_port': p.internal_port or 5000,
             'env_vars': p.env_vars or '{}',
+            'is_compose': bool(p.is_compose),
+            'compose_ports': p.compose_ports or '[]',
             'created_at': p.created_at.isoformat(),
             'user_id': p.user_id,
             'owner_username': owner.username if owner else None,
@@ -940,7 +985,12 @@ def admin_resources():
              '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'],
             capture_output=True, text=True, timeout=15
         )
-        name_to_project = {f"cit-deploy-{p.id[:8]}": p for p in Project.query.all()}
+        all_projects = Project.query.all()
+        # Single-container exact match: cit-deploy-{id[:8]}
+        name_to_project = {f"cit-deploy-{p.id[:8]}": p for p in all_projects if not p.is_compose}
+        # Compose prefix match: cit-deploy-{id[:8]}-{service}-1
+        compose_projects = [(f"cit-deploy-{p.id[:8]}", p) for p in all_projects if p.is_compose]
+
         containers = []
         total_cpu = 0.0
         total_mem_used = 0.0
@@ -958,14 +1008,31 @@ def admin_resources():
             mem_used_mb = parse_mem_mb(mem_parts[0]) if mem_parts else 0
             mem_limit_mb = parse_mem_mb(mem_parts[1]) if len(mem_parts) > 1 else 0
             mem_pct = float(mem_pct_str.replace('%', '') or 0)
-            proj = name_to_project.get(name)
             total_cpu += cpu_pct
             total_mem_used += mem_used_mb
             total_mem_limit += mem_limit_mb
+
+            # Resolve project + service name
+            proj = name_to_project.get(name)
+            service_name = None
+            if not proj:
+                # Try compose prefix match: cit-deploy-{id[:8]}-{service}-1
+                for prefix, p in compose_projects:
+                    if name.startswith(prefix + '-'):
+                        remainder = name[len(prefix) + 1:]  # "{service}-1"
+                        if remainder.endswith('-1'):
+                            service_name = remainder[:-2]
+                        else:
+                            service_name = remainder
+                        proj = p
+                        break
+
             containers.append({
                 'container_name': name,
                 'project_id': proj.id if proj else None,
                 'project_name': proj.name if proj else name,
+                'is_compose': bool(proj.is_compose) if proj else False,
+                'service_name': service_name,
                 'cpu_pct': round(cpu_pct, 2),
                 'mem_used_mb': round(mem_used_mb, 1),
                 'mem_limit_mb': round(mem_limit_mb, 1),

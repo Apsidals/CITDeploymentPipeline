@@ -50,11 +50,11 @@ function ProjectCard({ p }) {
         <span className="truncate">{shortRepo(p.repo_url)}</span>
       </div>
       <div className="foot">
-        {p.team_name ? (
-          <span className="team-chip">{p.team_name}</span>
-        ) : (
-          <span className="port">:{p.port}</span>
-        )}
+        <span style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0 }}>
+          {p.team_name && <span className="team-chip">{p.team_name}</span>}
+          {p.is_compose && <span className="compose-chip">compose</span>}
+          {!p.team_name && !p.is_compose && <span className="port">:{p.port}</span>}
+        </span>
         <span>{relTime(p.created_at)}</span>
       </div>
     </Link>
