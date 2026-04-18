@@ -22,9 +22,16 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
 __pycache__/
 *.pyc
 .env
+
+# Database
 *.db
 *.db-shm
 *.db-wal
+
+# CIT Deploy runtime
+backend/deployments/
