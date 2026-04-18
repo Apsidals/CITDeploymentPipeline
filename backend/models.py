@@ -55,6 +55,8 @@ class Project(db.Model):
     env_vars = db.Column(db.Text, default='{}')
     is_compose = db.Column(db.Boolean, default=False)
     compose_ports = db.Column(db.Text, default='[]')  # JSON list of {service, host_port, container_port}
+    build_mode = db.Column(db.String(20), default='dockerfile')  # 'dockerfile' | 'nixpacks'
+    start_command = db.Column(db.String(255), nullable=True)  # optional nixpacks start cmd override
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     builds = db.relationship('Build', backref='project', lazy=True, cascade='all, delete-orphan')

@@ -98,6 +98,8 @@ function EnvVarsEditor({ rows, onChange }) {
 function NewProjectModal({ open, onClose, onCreated, teams }) {
   const [name, setName] = useState('');
   const [repo, setRepo] = useState('');
+  const [buildMode, setBuildMode] = useState('dockerfile');
+  const [startCommand, setStartCommand] = useState('');
   const [dockerfilePath, setDockerfilePath] = useState('');
   const [internalPort, setInternalPort] = useState('');
   const [envRows, setEnvRows] = useState([]);
@@ -116,6 +118,8 @@ function NewProjectModal({ open, onClose, onCreated, teams }) {
   if (!open) return null;
 
   const handleClose = () => {
+    setBuildMode('dockerfile');
+    setStartCommand('');
     setDockerfilePath('');
     setInternalPort('');
     setEnvRows([]);
@@ -135,6 +139,8 @@ function NewProjectModal({ open, onClose, onCreated, teams }) {
       const payload = {
         name: name.trim(),
         repo_url: repo.trim(),
+        build_mode: buildMode,
+        start_command: startCommand.trim() || null,
         dockerfile_path: dockerfilePath.trim() || 'Dockerfile',
         internal_port: internalPort ? parseInt(internalPort, 10) : null,
         env_vars: envVarsObj,
@@ -187,6 +193,48 @@ function NewProjectModal({ open, onClose, onCreated, teams }) {
             />
           </div>
           <div className="field">
+            <label>Build mode</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[['dockerfile', 'Dockerfile'], ['nixpacks', 'Nixpacks (auto-detect)']].map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setBuildMode(val)}
+                  style={{
+                    flex: 1,
+                    padding: '7px 12px',
+                    borderRadius: 6,
+                    border: buildMode === val ? '1.5px solid var(--accent, #7c6cfa)' : '1.5px solid var(--border, #333)',
+                    background: buildMode === val ? 'var(--accent-dim, #2a2545)' : 'transparent',
+                    color: buildMode === val ? 'var(--accent, #7c6cfa)' : 'var(--muted, #888)',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: buildMode === val ? 600 : 400,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {buildMode === 'nixpacks' && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                Nixpacks auto-detects your stack — no Dockerfile needed. Works great for Flask, Node, and more.
+              </p>
+            )}
+          </div>
+          {buildMode === 'nixpacks' && (
+          <div className="field">
+            <label>Start command <span className="dim">(optional — auto-detected from app.py, main.py, etc.)</span></label>
+            <input
+              className="input mono"
+              value={startCommand}
+              onChange={(e) => setStartCommand(e.target.value)}
+              placeholder="python app.py"
+            />
+          </div>
+          )}
+          {buildMode === 'dockerfile' && (
+          <div className="field">
             <label>Dockerfile path <span className="dim">(optional)</span></label>
             <input
               className="input mono"
@@ -195,6 +243,7 @@ function NewProjectModal({ open, onClose, onCreated, teams }) {
               placeholder="Dockerfile"
             />
           </div>
+          )}
           <div className="field">
             <label>
               Container port <span className="dim">(optional — default 5000)</span>

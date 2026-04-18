@@ -76,6 +76,16 @@ with app.app_context():
             conn.execute(text("ALTER TABLE projects ADD COLUMN compose_ports TEXT NOT NULL DEFAULT '[]'"))
             conn.commit()
         print("[migrate] Added compose_ports column to projects table")
+    if 'build_mode' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN build_mode VARCHAR(20) NOT NULL DEFAULT 'dockerfile'"))
+            conn.commit()
+        print("[migrate] Added build_mode column to projects table")
+    if 'start_command' not in existing_cols:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN start_command VARCHAR(255)"))
+            conn.commit()
+        print("[migrate] Added start_command column to projects table")
     existing_user_cols = [c['name'] for c in inspector.get_columns('users')]
     for col, ddl in [
         ('email', 'VARCHAR(254)'),
@@ -419,6 +429,11 @@ def create_project():
     else:
         env_vars_str = '{}'
 
+    build_mode = data.get('build_mode', 'dockerfile')
+    if build_mode not in ('dockerfile', 'nixpacks'):
+        build_mode = 'dockerfile'
+    start_command = (data.get('start_command') or '').strip() or None
+
     # Atomically assign + commit a unique host port so concurrent project
     # creation requests cannot both read the same max and collide.
     with pipeline._port_lock:
@@ -439,6 +454,8 @@ def create_project():
             dockerfile_path=dockerfile_path,
             internal_port=internal_port,
             env_vars=env_vars_str,
+            build_mode=build_mode,
+            start_command=start_command,
         )
         db.session.add(project)
         db.session.commit()
@@ -453,6 +470,7 @@ def create_project():
         'dockerfile_path': project.dockerfile_path,
         'internal_port': project.internal_port,
         'env_vars': project.env_vars,
+        'build_mode': project.build_mode,
     }), 201
 
 @app.route('/projects/<project_id>', methods=['GET'])
@@ -471,6 +489,8 @@ def get_project(project):
         'env_vars': project.env_vars or '{}',
         'is_compose': bool(project.is_compose),
         'compose_ports': project.compose_ports or '[]',
+        'build_mode': project.build_mode or 'dockerfile',
+        'start_command': project.start_command or '',
         'created_at': project.created_at.isoformat(),
         'user_id': project.user_id,
         'team_id': project.team_id,

@@ -34,4 +34,4 @@ __pycache__/
 *.db-wal
 
 # CIT Deploy runtime
-backend/deployments/
+backend/deployments/backend/venv/ 

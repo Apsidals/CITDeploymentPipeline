@@ -199,6 +199,38 @@ def _assign_and_reserve_compose_ports(project_id, explicit_ports):
     return remapped
 
 
+def _detect_nixpacks_start_cmd(project_dir):
+    """
+    Infer a start command from common entry point patterns so students don't
+    need a Procfile.  Returns a command string, or None if a Procfile already
+    exists (nixpacks handles that itself).
+    """
+    # Procfile present — nixpacks will read it on its own
+    if os.path.exists(os.path.join(project_dir, 'Procfile')):
+        return None
+
+    req_path = os.path.join(project_dir, 'requirements.txt')
+    has_gunicorn = False
+    if os.path.exists(req_path):
+        with open(req_path, 'r', encoding='utf-8', errors='replace') as f:
+            has_gunicorn = any('gunicorn' in line.lower() for line in f)
+
+    # Gunicorn + app.py → production-style start
+    if has_gunicorn and os.path.exists(os.path.join(project_dir, 'app.py')):
+        return 'gunicorn app:app --bind 0.0.0.0:$PORT'
+
+    # Common entry point filenames in priority order
+    for entry in ('app.py', 'main.py', 'run.py', 'wsgi.py', 'server.py'):
+        if os.path.exists(os.path.join(project_dir, entry)):
+            return f'python {entry}'
+
+    # Django
+    if os.path.exists(os.path.join(project_dir, 'manage.py')):
+        return 'python manage.py runserver 0.0.0.0:$PORT'
+
+    return None
+
+
 def _patch_compose_ports(project_dir, compose_file, remapped_ports):
     """
     Directly rewrite port bindings in the cloned compose file so Docker sees
@@ -506,32 +538,65 @@ def deploy_project_task(project_id, build_id, lock: threading.Lock):
                 # ════════════════════════════════════════════════════════════
                 #  SINGLE CONTAINER PATH
                 # ════════════════════════════════════════════════════════════
-                raw_path = (project.dockerfile_path or 'Dockerfile').strip() or 'Dockerfile'
-                normalized_df = os.path.normpath(raw_path)
-                if os.path.isabs(normalized_df) or normalized_df.startswith('..'):
-                    raise Exception(f"Invalid dockerfile_path '{raw_path}' — must be relative")
+                build_mode = project.build_mode or 'dockerfile'
 
-                dockerfile_abs = os.path.join(project_dir, normalized_df)
-                if not os.path.exists(dockerfile_abs):
-                    raise Exception(
-                        f"No Dockerfile found at '{normalized_df}' and no compose file detected. "
-                        "Add a Dockerfile or docker-compose.yml to your repo."
+                if build_mode == 'nixpacks':
+                    # ── Nixpacks auto-build ───────────────────────────────
+                    import shutil as _shutil
+                    if not _shutil.which('nixpacks'):
+                        raise Exception(
+                            "nixpacks is not installed or not on PATH. "
+                            "Install it: winget install nixpacks  OR  npm install -g nixpacks"
+                        )
+                    append_log(build_id, "[✓] Build mode: nixpacks (auto-detecting stack)\n")
+
+                    start_cmd = (project.start_command or '').strip() or _detect_nixpacks_start_cmd(project_dir)
+                    if start_cmd:
+                        append_log(build_id, f"[✓] Start command: {start_cmd}\n")
+                    else:
+                        raise Exception(
+                            "Could not determine a start command. Add a Procfile to your repo "
+                            "(e.g. 'web: python app.py'), or set a start command in project settings."
+                        )
+
+                    nixpacks_cmd = ["nixpacks", "build", project_dir, "--name", project_name, "--start-cmd", start_cmd]
+                    append_log(build_id, "\n[Step 2] Building image with nixpacks...\n")
+                    success = run_cmd_with_logging(nixpacks_cmd, build_id, project_id=project_id)
+                    if timed_out.is_set():
+                        raise Exception("Build timed out after 5 minutes")
+                    if not success:
+                        raise Exception(
+                            "nixpacks build failed — check the output above. "
+                            "Make sure your repo has a requirements.txt and a recognizable "
+                            "entry point (app.py, main.py, etc.)."
+                        )
+                else:
+                    # ── Dockerfile build ──────────────────────────────────
+                    raw_path = (project.dockerfile_path or 'Dockerfile').strip() or 'Dockerfile'
+                    normalized_df = os.path.normpath(raw_path)
+                    if os.path.isabs(normalized_df) or normalized_df.startswith('..'):
+                        raise Exception(f"Invalid dockerfile_path '{raw_path}' — must be relative")
+
+                    dockerfile_abs = os.path.join(project_dir, normalized_df)
+                    if not os.path.exists(dockerfile_abs):
+                        raise Exception(
+                            f"No Dockerfile found at '{normalized_df}' and no compose file detected. "
+                            "Add a Dockerfile or docker-compose.yml to your repo."
+                        )
+                    append_log(build_id, f"[✓] Dockerfile found at '{normalized_df}'\n")
+
+                    append_log(build_id, "\n[Step 2] Building Docker image...\n")
+                    df_dir = os.path.dirname(normalized_df)
+                    build_context = os.path.join(project_dir, df_dir) if df_dir else project_dir
+                    dockerfile_rel = os.path.basename(normalized_df) if df_dir else normalized_df
+                    success = run_cmd_with_logging(
+                        ["docker", "build", "--progress=plain", "-t", project_name, "-f", dockerfile_rel, "."],
+                        build_id, cwd=build_context, project_id=project_id
                     )
-                append_log(build_id, f"[✓] Dockerfile found at '{normalized_df}'\n")
-
-                # Build
-                append_log(build_id, "\n[Step 2] Building Docker image...\n")
-                df_dir = os.path.dirname(normalized_df)
-                build_context = os.path.join(project_dir, df_dir) if df_dir else project_dir
-                dockerfile_rel = os.path.basename(normalized_df) if df_dir else normalized_df
-                success = run_cmd_with_logging(
-                    ["docker", "build", "--progress=plain", "-t", project_name, "-f", dockerfile_rel, "."],
-                    build_id, cwd=build_context, project_id=project_id
-                )
-                if timed_out.is_set():
-                    raise Exception("Build timed out after 5 minutes")
-                if not success:
-                    raise Exception("docker build failed — check the Dockerfile and build output above")
+                    if timed_out.is_set():
+                        raise Exception("Build timed out after 5 minutes")
+                    if not success:
+                        raise Exception("docker build failed — check the Dockerfile and build output above")
 
                 # Run
                 internal_port = project.internal_port or 5000
